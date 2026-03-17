@@ -56,6 +56,36 @@ class TrajGenerator {
     }
 
   public:
+    /**
+     * @brief 🌟 1번 요구사항: 궤적 생성기 초기화 및 동기화
+     */
+    void initialize(const rt_control::model::RobotModel& robot_model,
+                    const angles_t &q, 
+                    const angles_t &dq, 
+                    const angles_t &ddq) noexcept {
+        m_model = robot_model;
+        m_angles = q;
+        m_angvels = dq;
+        m_angaccs = ddq;
+        m_traj_state = traj_state_t::STOP; // 초기화 시 안전을 위해 정지 상태로 설정
+        
+        update_clip();
+        update_subordinates();
+    }
+
+    /**
+     * @brief 🌟 TCP 설정 및 획득 메서드
+     */
+    void set_tcp_tmat(const tmat_t &new_tcp_tmat) noexcept {
+        m_tcp_tmat = new_tcp_tmat;
+        update_subordinates(); // TCP가 변하면 현재 tmat도 즉시 갱신
+    }
+
+    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept {
+        return m_tcp_tmat;
+    }
+
+  public:
     void update(const value_t &dt) noexcept {
         switch (traj_state()) {
         case traj_state_t::STOP:
@@ -96,7 +126,6 @@ class TrajGenerator {
         m_traj_state = traj_state_t::STOPPING;
     }
 
-    // [1] TRAPJ: 가속도 한계를 모델에서 가져옴
     [[nodiscard]] bool trapj(
         const angles_t &goal_angles,
         const std::optional<angles_t> &goal_angvels_opt = std::nullopt,
@@ -105,8 +134,6 @@ class TrajGenerator {
         const std::optional<value_t> &duration = std::nullopt) noexcept 
     {
         angles_t goal_angvels = goal_angvels_opt.value_or(angles_t::Zero());
-        
-        // 🌟 모델 데이터로 연동
         angles_t peak_angvels = peak_angvels_opt.value_or(m_model.get_max_angvels());
         angles_t peak_angaccs = peak_angaccs_opt.value_or(m_model.get_max_angaccs());
 
@@ -117,15 +144,11 @@ class TrajGenerator {
         return true;
     }
 
-    // [2] ATTRJ: 가속도 한계를 모델에서 가져옴
     [[nodiscard]] bool attrj(
         const angles_t &goal_angles, const value_t &kp_in,
         const std::optional<angles_t> &goal_angvels_opt = std::nullopt) noexcept 
     {
         angles_t goal_angvels = goal_angvels_opt.value_or(angles_t::Zero());
-
-        // TrajAttrJ 내부에서 m_model->get_max_angaccs()를 참조하도록 설계되어 있다면
-        // 생성자 인자만 정확히 넘겨주면 됩니다.
         m_gen_attrj = TrajAttrJ(&m_model, angles(), angvels(), angaccs(), 
                                 goal_angles, goal_angvels);
         
@@ -136,16 +159,13 @@ class TrajGenerator {
         return true;
     }
 
-    // [3] ATTRL: Task Space 가속도 설정
     [[nodiscard]] bool attrl(
         const tmat_t &goal_tmat, const value_t &kp_cartesian = 10.0,
         const std::optional<value_t> &peak_endvel_opt = std::nullopt,
         const std::optional<value_t> &peak_endacc_opt = std::nullopt) noexcept 
     {
-        // 선속도 한계 (m/s), 선가속도 한계 (m/s^2)
-        // 모델에 Task 한계가 정의되어 있지 않다면 안전한 기본값 사용
         value_t peak_endvel = peak_endvel_opt.value_or(0.5); 
-        value_t peak_endacc = peak_endacc_opt.value_or(1.0); // 1.0 m/s^2 (부드러움)
+        value_t peak_endacc = peak_endacc_opt.value_or(1.0); 
 
         m_gen_attrl = TrajAttrL(&m_model, angles(), angvels(), angaccs(),
                                 peak_endvel, M_PI, peak_endacc, M_PI*2);
@@ -199,31 +219,28 @@ class TrajGenerator {
         return std::nullopt;
     }
 
-    [[nodiscard]] std::optional<angles_t> goal_angvels() const noexcept {
-        return std::nullopt; 
-    }
-
     [[nodiscard]] std::optional<tmat_t> goal_tmat() const noexcept {
-        // 🌟 ATTRL 모드일 경우 새로운 Getter인 goal_pose() 호출
         if (traj_state() == traj_state_t::ATTRL) {
             return m_gen_attrl.goal_pose();
         }
-
         const auto gangles = goal_angles();
-        if (!gangles.has_value()) {
-            return std::nullopt;
-        }
+        if (!gangles.has_value()) return std::nullopt;
         return m_model.forward_kinematics(gangles.value()) * m_tcp_tmat;
     }
 
-    [[nodiscard]] std::optional<a_t> goal_a() const noexcept {
-        return std::nullopt;
-    }
-
     [[nodiscard]] bool goal_reached() const noexcept {
+        // 🌟 정지 상태라면 도달한 것으로 간주
+        if (m_traj_state == traj_state_t::STOP) return true;
+
         auto g_angles = goal_angles();
         if (g_angles.has_value()) {
-            return (m_angles - g_angles.value()).norm() < 1.0; 
+            return (m_angles - g_angles.value()).norm() < 0.1; // 0.1도 이내 수렴 확인
+        }
+        
+        if (m_traj_state == traj_state_t::ATTRL) {
+            auto target_pose = m_gen_attrl.goal_pose();
+            double dist = (m_tmat.translation() - target_pose.translation()).norm();
+            return dist < 0.001; // 1mm 이내 수렴 확인
         }
         return false;
     }
@@ -231,37 +248,29 @@ class TrajGenerator {
   protected:
     void update_stopping(const value_t &dt) noexcept {
         m_gen_stop.update(dt);
-        m_angles = m_gen_stop.angles();
-        m_angvels = m_gen_stop.angvels();
+        m_angles = m_gen_stop.angles(); 
+        m_angvels = m_gen_stop.angvels(); 
         m_angaccs = m_gen_stop.angaccs();
     }
-
     void update_trapj(const value_t &dt) noexcept {
         m_gen_trapj.update(dt);
-        m_angles = m_gen_trapj.angles();
-        m_angvels = m_gen_trapj.angvels();
+        m_angles = m_gen_trapj.angles(); 
+        m_angvels = m_gen_trapj.angvels(); 
         m_angaccs = m_gen_trapj.angaccs();
     }
-
     void update_attrj(const value_t &dt) noexcept {
         m_gen_attrj.update(dt);
-        m_angles = m_gen_attrj.angles();
-        m_angvels = m_gen_attrj.angvels();
-        m_angaccs = m_gen_attrj.angaccs();
+        m_angles = m_gen_attrj.angles(); m_angvels = m_gen_attrj.angvels(); m_angaccs = m_gen_attrj.angaccs();
     }
 
     void update_attrl(const value_t &dt) noexcept {
         m_gen_attrl.update(dt);
-        m_angles = m_gen_attrl.angles();
-        m_angvels = m_gen_attrl.angvels();
-        m_angaccs = m_gen_attrl.angaccs();
+        m_angles = m_gen_attrl.angles(); m_angvels = m_gen_attrl.angvels(); m_angaccs = m_gen_attrl.angaccs();
     }
 
     void update_playj(const value_t &dt) noexcept {
         m_gen_playj.update(dt);
-        m_angles = m_gen_playj.angles();
-        m_angvels = m_gen_playj.angvels();
-        m_angaccs = m_gen_playj.angaccs();
+        m_angles = m_gen_playj.angles(); m_angvels = m_gen_playj.angvels(); m_angaccs = m_gen_playj.angaccs();
     }
 
     void update_clip() noexcept {
@@ -288,15 +297,15 @@ class TrajGenerator {
     TrajAttrL m_gen_attrl;
     TrajPlayJ m_gen_playj;
 
-    angles_t m_angles;
-    angles_t m_angvels;
-    angles_t m_angaccs;
+    angles_t m_angles = angles_t::Zero();
+    angles_t m_angvels = angles_t::Zero();
+    angles_t m_angaccs = angles_t::Zero();
     
-    tmat_t m_tcp_tmat; 
-    tmat_t m_tmat;
-    jmat_t m_jmat;
-    a_t m_a;
-    a_t m_a_d1;
+    tmat_t m_tcp_tmat = tmat_t::Identity(); 
+    tmat_t m_tmat = tmat_t::Identity();
+    jmat_t m_jmat = jmat_t::Zero();
+    a_t m_a = a_t::Zero();
+    a_t m_a_d1 = a_t::Zero();
 };
 
 } // namespace trajectory
