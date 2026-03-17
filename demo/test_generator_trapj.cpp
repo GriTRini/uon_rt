@@ -53,7 +53,7 @@ int main() {
     angles_t q_goal = angles_t::Zero();
     q_goal(0) = 10.0;
 
-    (void)traj_gen.attrj(q_goal, 5.0);
+    (void)traj_gen.trapj(q_goal);
 
     // 타이머 가동
     control_timer.start();

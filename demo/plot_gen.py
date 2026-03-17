@@ -2,47 +2,51 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
-# 1. CSV 파일 불러오기
-file_path = "/home/uon/uon_rt/demo/gen_only_debug.csv"
+def plot_robot_trajectory(file_path):
+    # 1. CSV 파일 로드
+    if not os.path.exists(file_path):
+        print(f"에러: {file_path} 파일을 찾을 수 없습니다.")
+        return
 
-if not os.path.exists(file_path):
-    print(f"Error: {file_path} 파일이 존재하지 않습니다. 먼저 C++ 코드를 실행해 주세요.")
-else:
     df = pd.read_csv(file_path)
 
-    # 2. 그래프 그리기 (3행 1열 구조)
-    fig, axs = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
-    fig.suptitle('Trajectory Generator Debug (Joint 0)', fontsize=16)
+    # 2. 그래프 설정 (3개의 행으로 구성된 서브플롯)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+    plt.subplots_adjust(hspace=0.3)
 
-    # (1) Position - 목표 각도 (deg)
-    axs[0].plot(df['Time'], df['Desired_Q'], color='blue', linewidth=2, label='Desired Q')
-    axs[0].set_ylabel('Position [deg]')
-    axs[0].grid(True, linestyle='--', alpha=0.7)
-    axs[0].legend()
+    # 타임스탬프 (X축)
+    time = df['Time']
 
-    # (2) Velocity - 목표 속도 (deg/s)
-    axs[1].plot(df['Time'], df['Desired_DQ'], color='green', linewidth=2, label='Desired DQ')
-    axs[1].set_ylabel('Velocity [deg/s]')
-    axs[1].grid(True, linestyle='--', alpha=0.7)
-    axs[1].legend()
+    # --- (1) Position Plot (Desired_Q) ---
+    axes[0].plot(time, df['Desired_Q'], color='royalblue', linewidth=2, label='Position (deg)')
+    axes[0].set_ylabel('Position [deg]', fontsize=12)
+    axes[0].set_title('Joint Trajectory: Position', fontsize=14)
+    axes[0].grid(True, linestyle='--', alpha=0.7)
+    axes[0].legend(loc='upper right')
 
-    # (3) Acceleration - 목표 가속도 (deg/s^2)
-    # 🌟 이 그래프가 수직으로 튀는 지점이 Jerk 발생 지점입니다.
-    axs[2].plot(df['Time'], df['Desired_DDQ'], color='red', linewidth=2, label='Desired DDQ')
-    axs[2].set_ylabel('Acceleration [deg/s^2]')
-    axs[2].set_xlabel('Time [s]')
-    axs[2].grid(True, linestyle='--', alpha=0.7)
-    axs[2].legend()
+    # --- (2) Velocity Plot (Desired_DQ) ---
+    axes[1].plot(time, df['Desired_DQ'], color='darkorange', linewidth=2, label='Velocity (deg/s)')
+    axes[1].set_ylabel('Velocity [deg/s]', fontsize=12)
+    axes[1].set_title('Joint Trajectory: Velocity', fontsize=14)
+    axes[1].grid(True, linestyle='--', alpha=0.7)
+    axes[1].legend(loc='upper right')
 
-    # 그래프 간격 조절 및 출력
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # --- (3) Acceleration Plot (Desired_DDQ) ---
+    axes[2].plot(time, df['Desired_DDQ'], color='crimson', linewidth=2, label='Acceleration (deg/s²)')
+    axes[2].set_xlabel('Time [sec]', fontsize=12)
+    axes[2].set_ylabel('Acceleration [deg/s²]', fontsize=12)
+    axes[2].set_title('Joint Trajectory: Acceleration', fontsize=14)
+    axes[2].grid(True, linestyle='--', alpha=0.7)
+    axes[2].legend(loc='upper right')
+
+    # 전체 레이아웃 조정 및 저장/출력
+    plt.tight_layout()
+    output_image = "trajectory_plot.png"
+    plt.savefig(output_image)
+    print(f"그래프가 {output_image}로 저장되었습니다.")
     plt.show()
-    
-    # 🌟 Jerk(가가속도) 계산 및 분석
-    dt = df['Time'].diff().mean()
-    jerk = df['Desired_DDQ'].diff() / dt
-    print(f"--- 분석 결과 ---")
-    print(f"최대 가속도: {df['Desired_DDQ'].max():.2f} deg/s^2")
-    print(f"최대 Jerk(계산치): {jerk.abs().max():.2f} deg/s^3")
-    if jerk.abs().max() > 10000:
-        print("경고: 가속도가 불연속적으로 변하고 있습니다(TrapJ 특성). 실제 로봇에서 충격이 발생할 수 있습니다.")
+
+if __name__ == "__main__":
+    # 사용자의 경로에 맞춰 파일 지정
+    CSV_PATH = "/home/uon/uon_rt/demo/gen_only_trapj.csv"
+    plot_robot_trajectory(CSV_PATH)
