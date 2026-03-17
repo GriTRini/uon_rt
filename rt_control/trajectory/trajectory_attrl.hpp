@@ -10,6 +10,7 @@ namespace trajectory {
 
 class TrajAttrL : public TrajAttrJ {
   public:
+    TrajAttrL() = default;
     using Base = TrajAttrJ;
     using value_t = rt_control::value_t;
     using angles_t = rt_control::angles_t;

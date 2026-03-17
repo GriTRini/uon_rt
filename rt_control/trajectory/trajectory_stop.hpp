@@ -40,8 +40,8 @@ class TrajStop : public TrajAttrJ {
   public:
     [[nodiscard]] bool goal_reached() const noexcept {
         // 위치 오차와 속도 오차가 모두 임계값(1도, 1도/s) 이내로 들어오면 "완전 정지"로 판정
-        return (Base::angles_enorm() <= ANGLES_ENORM_THOLD_RAD) && 
-               (Base::angvels_enorm() <= ANGVELS_ENORM_THOLD_RAD);
+        return ((this->angles() - this->goal_angles()).norm() <= ANGLES_ENORM_THOLD_RAD) &&
+                (this->angvels().norm() <= ANGVELS_ENORM_THOLD_RAD);
     }
 };
 

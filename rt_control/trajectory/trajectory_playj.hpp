@@ -64,14 +64,20 @@ class TrajPlayJ {
         angles_t new_angles = m_goal_angles_set.row(m_goal_index);
 
         // 속도가 주어지면 그대로 쓰고, 없으면 이전 스텝과의 미분으로 계산
-        angles_t new_angvels = m_goal_angvels_set.has_value() 
-                               ? m_goal_angvels_set.value().row(m_goal_index) 
-                               : (new_angles - m_angles) / dt;
+        angles_t new_angvels;
+        if (m_goal_angvels_set.has_value()) {
+            new_angvels = m_goal_angvels_set.value().row(m_goal_index);
+        } else {
+            new_angvels = (new_angles - m_angles) / dt;
+        }
 
         // 가속도가 주어지면 그대로 쓰고, 없으면 미분으로 계산
-        angles_t new_angaccs = m_goal_angaccs_set.has_value() 
-                               ? m_goal_angaccs_set.value().row(m_goal_index) 
-                               : (new_angvels - m_angvels) / dt;
+        angles_t new_angaccs;
+        if (m_goal_angaccs_set.has_value()) {
+            new_angaccs = m_goal_angaccs_set.value().row(m_goal_index);
+        } else {
+            new_angaccs = (new_angvels - m_angvels) / dt;
+        }
 
         // 한계값 클리핑 (Clipping)
         m_angles  = new_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
