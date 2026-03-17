@@ -1,5 +1,16 @@
-#ifndef CB551DAC_5C89_4467_A241_CBBE314D43DA
-#define CB551DAC_5C89_4467_A241_CBBE314D43DA
+// /home/uon/uon_rt/rt_control/rt_data.hpp 내부에 추가
+#pragma once
+#include <chrono>
+#include <string>
 
-
-#endif /* CB551DAC_5C89_4467_A241_CBBE314D43DA */
+namespace rt_control {
+    struct LogAlarm {
+        std::chrono::system_clock::time_point time;
+        int level;
+        int group;
+        int index;
+        std::string param1;
+        std::string param2;
+        std::string param3;
+    };
+}
