@@ -3,101 +3,91 @@
 #include "trajectory_attrj.hpp"
 #include "../model/model.hpp"
 #include <Eigen/Geometry>
-#include <iostream>
 
 namespace rt_control {
 namespace trajectory {
 
 class TrajAttrL : public TrajAttrJ {
-  public:
-    TrajAttrL() = default;
+  private:
     using Base = TrajAttrJ;
-    using value_t = rt_control::value_t;
-    using angles_t = rt_control::angles_t;
 
   public:
-    TrajAttrL(
-        const model::RobotModel* robot_model,
-        const angles_t &start_angles,
-        const angles_t &start_angvels,
-        const angles_t &start_angaccs,
-        value_t peak_endvel = 2.0,       // m/s
-        value_t peak_endangvel = M_PI,   // rad/s
-        value_t peak_endacc = 10.0,      // m/s^2
-        value_t peak_endangacc = M_PI*2) // rad/s^2
-        // AttrL은 내부 Joint 구동을 위해 부모(AttrJ)에게 로봇의 최대 하드웨어 한계를 넘겨줌
-        : Base(robot_model, start_angles, start_angvels, start_angaccs,
-               robot_model->get_max_angvels(), robot_model->get_max_angaccs()),
-          m_model(robot_model),
+    using angles_t = Base::angles_t;
+    using value_t = Base::value_t;
+    using tmat_t = Eigen::Isometry3d;
+
+    constexpr static size_t IK_STEP_MAX = 1000;
+    constexpr static value_t IK_ENORM_THOLD = 1e-4;
+
+  public:
+    TrajAttrL() = default;
+
+    // 🌟 생성자 인자를 8개로 업데이트 (테스트 코드와 일치)
+    TrajAttrL(const model::RobotModel* model,
+              const angles_t &q, const angles_t &dq, const angles_t &ddq,
+              value_t peak_endvel = 0.5,
+              value_t peak_endangvel = M_PI,
+              value_t peak_endacc = 2.0,
+              value_t peak_endangacc = M_PI*2) 
+        : Base(model, q, dq, ddq), 
+          m_model(model),
           m_peak_endvel(peak_endvel),
-          m_peak_endangvel(peak_endangvel),
-          m_peak_endacc(peak_endacc),
-          m_peak_endangacc(peak_endangacc) 
+          m_peak_endangvel(peak_endangvel) 
     {
-        m_current_pose = m_model->forward_kinematics(start_angles);
-        m_goal_pose = m_current_pose; 
-        m_kp_cartesian = 10.0;        
+        m_current_pose = m_model->forward_kinematics(q);
+        m_goal_pose = m_current_pose;
+        this->set_kp(angles_t::Constant(800.0)); 
+        m_kp_cartesian = 200.0; 
     }
 
   public:
-    void update(const value_t &dt) noexcept {
-        if (dt <= 0.0) return;
+    // 🌟 부모와 동일하게 bool 반환 타입 유지
+    [[nodiscard]] bool update(const value_t &dt) noexcept override {
+        if (dt <= 0.0) return false;
 
-        m_current_pose = m_model->forward_kinematics(Base::angles());
+        m_current_pose = m_model->forward_kinematics(this->m_angles);
 
         Eigen::Vector3d p_err = m_goal_pose.translation() - m_current_pose.translation();
         Eigen::AngleAxisd r_err_aa(m_goal_pose.linear() * m_current_pose.linear().transpose());
         Eigen::Vector3d w_err = r_err_aa.angle() * r_err_aa.axis();
 
-        Eigen::Matrix<value_t, 6, 1> V_target;
-        V_target << p_err * m_kp_cartesian, w_err * m_kp_cartesian;
+        Eigen::Matrix<value_t, 6, 1> V_cmd;
+        V_cmd << p_err * m_kp_cartesian, w_err * m_kp_cartesian;
 
-        // Cartesian 속도 한계 클리핑 (방향성은 유지하고 크기만 스케일링)
-        value_t linear_vel_norm = V_target.head<3>().norm();
-        if (linear_vel_norm > m_peak_endvel) {
-            V_target.head<3>() *= (m_peak_endvel / linear_vel_norm);
-        }
-        value_t angular_vel_norm = V_target.tail<3>().norm();
-        if (angular_vel_norm > m_peak_endangvel) {
-            V_target.tail<3>() *= (m_peak_endangvel / angular_vel_norm);
-        }
+        value_t v_norm = V_cmd.head<3>().norm();
+        if (v_norm > m_peak_endvel) V_cmd.head<3>() *= (m_peak_endvel / v_norm);
+        
+        value_t w_norm = V_cmd.tail<3>().norm();
+        if (w_norm > m_peak_endangvel) V_cmd.tail<3>() *= (m_peak_endangvel / w_norm);
 
         Eigen::Isometry3d next_pose = m_current_pose;
-        next_pose.translation() += V_target.head<3>() * dt;
-        
-        // .toRotationMatrix() 제거된 정상 코드
-        if (V_target.tail<3>().norm() > 1e-6) {
-            next_pose.linear() = Eigen::AngleAxisd(V_target.tail<3>().norm() * dt, 
-                                 V_target.tail<3>().normalized()) * next_pose.linear();
+        next_pose.translation() += V_cmd.head<3>() * dt;
+        if (w_norm > 1e-6) {
+            next_pose.linear() = Eigen::AngleAxisd(w_norm * dt, V_cmd.tail<3>().normalized()) * next_pose.linear();
         }
 
-        // 역기구학을 통해 목표 조인트 각도 도출
-        auto [new_goal_angles, converged] = m_model->inverse_kinematics(next_pose, Base::angles(), 10, 1e-4, 0.01);
+        auto [new_goal_q, converge] = m_model->inverse_kinematics(
+            next_pose, this->m_angles, IK_STEP_MAX, IK_ENORM_THOLD, 1.0);
 
-        // 도출된 각도를 부모 클래스(AttrJ)에 넘겨서 모터 한계 내에서 부드럽게 이동시킴
-        Base::set_goal_angles(new_goal_angles);
-        Base::update(dt);
+        if (!converge) return false;
+
+        this->set_goal_angles(new_goal_q);
+        return Base::update(dt); // 부모 업데이트 호출 결과 반환
     }
 
-    void set_goal_pose(const Eigen::Isometry3d &new_goal_pose) noexcept {
-        m_goal_pose = new_goal_pose;
-    }
+    // 🌟 테스트 코드에서 사용하는 Getter 추가
+    [[nodiscard]] const tmat_t& current_pose() const noexcept { return m_current_pose; }
+    [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_goal_pose; }
 
-    void set_kp_cartesian(value_t kp) noexcept {
-        m_kp_cartesian = std::clamp(kp, (value_t)0.0, (value_t)2000.0);
-    }
-
-    [[nodiscard]] const Eigen::Isometry3d& current_pose() const noexcept { return m_current_pose; }
-    [[nodiscard]] const Eigen::Isometry3d& goal_pose() const noexcept { return m_goal_pose; }
+    void set_goal_pose(const tmat_t &new_goal) noexcept { m_goal_pose = new_goal; }
+    void set_kp_cartesian(value_t kp) noexcept { m_kp_cartesian = kp; }
 
   protected:
-    const model::RobotModel* m_model;
-    Eigen::Isometry3d m_current_pose;
-    Eigen::Isometry3d m_goal_pose;
+    const model::RobotModel* m_model = nullptr;
+    tmat_t m_current_pose, m_goal_pose;
     value_t m_kp_cartesian;
-
-    value_t m_peak_endvel, m_peak_endangvel;
-    value_t m_peak_endacc, m_peak_endangacc;
+    value_t m_peak_endvel;
+    value_t m_peak_endangvel;
 };
 
 } // namespace trajectory

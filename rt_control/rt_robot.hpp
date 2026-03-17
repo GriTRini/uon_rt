@@ -193,8 +193,8 @@ template <size_t ID = 0> class Robot {
             }
         }
 
-        const auto start_angles = get_current_angles();
-        const auto start_angvels = get_current_angvels();
+        const auto start_angles = this->get_current_angles();
+        const auto start_angvels = this->get_current_angvels();
         if (!start_angles.has_value() || !start_angvels.has_value()) {
             return ServoOnError::GET_ROBOT_STATE_ERROR;
         }
@@ -281,6 +281,34 @@ template <size_t ID = 0> class Robot {
     {
         if (!m_update_timer.is_running()) { return false; }
         return m_traj_gen.trapj(goal_angles, goal_angvels, peak_angvels, peak_angaccs, duration);
+    }
+
+    [[nodiscard]] bool attrj(
+        const angles_t &goal_angles, const value_t &kp,
+        const std::optional<angles_t> &goal_angvels = std::nullopt) noexcept 
+    {
+        if (!m_update_timer.is_running()) { return false; }
+        return m_traj_gen.attrj(goal_angles, kp, goal_angvels);
+    }
+
+    [[nodiscard]] bool attrl(
+        const tmat_t &goal_tmat, const value_t &kp_cartesian = 10.0,
+        const std::optional<value_t> &peak_endvel = std::nullopt,
+        const std::optional<value_t> &peak_endacc = std::nullopt) noexcept 
+    {
+        if (!m_update_timer.is_running()) { return false; }
+        return m_traj_gen.attrl(goal_tmat, kp_cartesian, peak_endvel, peak_endacc);
+    }
+
+    [[nodiscard]] bool playj(
+        const angles_set_t &goal_angles_set,
+        const std::optional<angles_set_t> &goal_angvels_set = std::nullopt,
+        const std::optional<angles_set_t> &goal_angaccs_set = std::nullopt,
+        const std::optional<angles_t> &peak_angvels = std::nullopt,
+        const std::optional<angles_t> &peak_angaccs = std::nullopt) noexcept 
+    {
+        if (!m_update_timer.is_running()) { return false; }
+        return m_traj_gen.playj(goal_angles_set, goal_angvels_set, goal_angaccs_set, peak_angvels, peak_angaccs);
     }
 
     [[nodiscard]] bool mwait(

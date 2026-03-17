@@ -57,7 +57,7 @@ class TrajGenerator {
 
   public:
     /**
-     * @brief 🌟 1번 요구사항: 궤적 생성기 초기화 및 동기화
+     * @brief 궤적 생성기 초기화 및 동기화
      */
     void initialize(const rt_control::model::RobotModel& robot_model,
                     const angles_t &q, 
@@ -67,18 +67,15 @@ class TrajGenerator {
         m_angles = q;
         m_angvels = dq;
         m_angaccs = ddq;
-        m_traj_state = traj_state_t::STOP; // 초기화 시 안전을 위해 정지 상태로 설정
+        m_traj_state = traj_state_t::STOP; 
         
         update_clip();
         update_subordinates();
     }
 
-    /**
-     * @brief 🌟 TCP 설정 및 획득 메서드
-     */
     void set_tcp_tmat(const tmat_t &new_tcp_tmat) noexcept {
         m_tcp_tmat = new_tcp_tmat;
-        update_subordinates(); // TCP가 변하면 현재 tmat도 즉시 갱신
+        update_subordinates(); 
     }
 
     [[nodiscard]] tmat_t get_tcp_tmat() const noexcept {
@@ -102,6 +99,7 @@ class TrajGenerator {
             break;
 
         case traj_state_t::ATTRJ:
+            // 🌟 수정됨: 내부 AttrJ 객체 업데이트 및 값 복사
             update_attrj(dt);
             break;
 
@@ -149,8 +147,13 @@ class TrajGenerator {
         const std::optional<angles_t> &goal_angvels_opt = std::nullopt) noexcept 
     {
         angles_t goal_angvels = goal_angvels_opt.value_or(angles_t::Zero());
+        
+        // 🌟 하드웨어 한계를 모델에서 가져와 전달
         m_gen_attrj = TrajAttrJ(&m_model, angles(), angvels(), angaccs(), 
-                                goal_angles, goal_angvels);
+                                m_model.get_max_angvels(), m_model.get_max_angaccs());
+        
+        m_gen_attrj.set_goal_angles(goal_angles);
+        m_gen_attrj.set_goal_angvels(goal_angvels);
         
         angles_t kp_vec = angles_t::Constant(kp_in);
         m_gen_attrj.set_kp(kp_vec);
@@ -229,18 +232,17 @@ class TrajGenerator {
     }
 
     [[nodiscard]] bool goal_reached() const noexcept {
-        // 🌟 정지 상태라면 도달한 것으로 간주
         if (m_traj_state == traj_state_t::STOP) return true;
 
         auto g_angles = goal_angles();
         if (g_angles.has_value()) {
-            return (m_angles - g_angles.value()).norm() < 0.1; // 0.1도 이내 수렴 확인
+            return (m_angles - g_angles.value()).norm() < 0.1; 
         }
         
         if (m_traj_state == traj_state_t::ATTRL) {
             auto target_pose = m_gen_attrl.goal_pose();
             double dist = (m_tmat.translation() - target_pose.translation()).norm();
-            return dist < 0.001; // 1mm 이내 수렴 확인
+            return dist < 0.001; 
         }
         return false;
     }
@@ -259,18 +261,25 @@ class TrajGenerator {
         m_angaccs = m_gen_trapj.angaccs();
     }
     void update_attrj(const value_t &dt) noexcept {
+        // 🌟 수정됨: 내부 AttrJ 객체 업데이트 후 상태 복사
         m_gen_attrj.update(dt);
-        m_angles = m_gen_attrj.angles(); m_angvels = m_gen_attrj.angvels(); m_angaccs = m_gen_attrj.angaccs();
+        m_angles = m_gen_attrj.angles(); 
+        m_angvels = m_gen_attrj.angvels(); 
+        m_angaccs = m_gen_attrj.angaccs();
     }
 
     void update_attrl(const value_t &dt) noexcept {
         m_gen_attrl.update(dt);
-        m_angles = m_gen_attrl.angles(); m_angvels = m_gen_attrl.angvels(); m_angaccs = m_gen_attrl.angaccs();
+        m_angles = m_gen_attrl.angles(); 
+        m_angvels = m_gen_attrl.angvels(); 
+        m_angaccs = m_gen_attrl.angaccs();
     }
 
     void update_playj(const value_t &dt) noexcept {
         m_gen_playj.update(dt);
-        m_angles = m_gen_playj.angles(); m_angvels = m_gen_playj.angvels(); m_angaccs = m_gen_playj.angaccs();
+        m_angles = m_gen_playj.angles(); 
+        m_angvels = m_gen_playj.angvels(); 
+        m_angaccs = m_gen_playj.angaccs();
     }
 
     void update_clip() noexcept {
