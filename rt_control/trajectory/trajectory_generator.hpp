@@ -159,11 +159,12 @@ class TrajGenerator {
         value_t peak_endvel = peak_endvel_opt.value_or(0.5); 
         value_t peak_endacc = peak_endacc_opt.value_or(2.0);
 
+        // 🌟 RobotModel로부터 AttrL 전용 가속도 리밋을 명시적으로 가져와서 전달
         m_gen_attrl = TrajAttrL(&m_model, angles(), angvels(), angaccs(),
                                 peak_endvel, peak_endacc);
 
         m_gen_attrl.set_goal_pose(goal_tmat);
-        set_combined_kp(kp_combined); // 통합 게인 적용
+        set_combined_kp(kp_combined);
 
         m_traj_state = traj_state_t::ATTRL;
         return true;

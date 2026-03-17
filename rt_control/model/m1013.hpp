@@ -40,10 +40,17 @@ inline const angles_t HW_MIN_ANGLES = (angles_t() << -360, -95, -145, -360, -135
 inline const angles_t HW_MAX_ANGLES = (angles_t() << 360, 95, 145, 360, 135, 360).finished();
 inline const angles_t MIN_ANGLES = (HW_MIN_ANGLES.array() + 5.0).matrix();
 inline const angles_t MAX_ANGLES = (HW_MAX_ANGLES.array() - 5.0).matrix();
+
 inline const angles_t MAX_ANGVELS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
 inline const angles_t MIN_ANGVELS = -MAX_ANGVELS;
+
+// 기존 (TrapJ, AttrJ 용)
 inline const angles_t MAX_ANGACCS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
 inline const angles_t MIN_ANGACCS = -MAX_ANGACCS;
+
+// 🌟 AttrL 전용 상향된 각가속도 (10배)
+inline const angles_t MAX_ATTRL_ANGACCS = (angles_t() << 1200, 1200, 1800, 2250, 2250, 2550).finished();
+inline const angles_t MIN_ATTRL_ANGACCS = -MAX_ATTRL_ANGACCS;
 
 // --- 3D 기구학 파라미터 (DH 파라미터 대체) ---
 inline const std::array<Joint, 6> joints = {

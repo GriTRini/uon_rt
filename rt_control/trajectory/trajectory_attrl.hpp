@@ -27,7 +27,7 @@ public:
               value_t peak_endvel = 0.5,
               value_t peak_endacc = 2.0)
         : Base(robot_model, start_angles, start_angvels, start_angaccs,
-               robot_model->get_max_angvels(), robot_model->get_max_angaccs()),
+               robot_model->get_max_angvels(), robot_model->get_max_attrl_angaccs()),
           m_model(robot_model),
           m_peak_endvel(peak_endvel),
           m_peak_endacc(peak_endacc) 

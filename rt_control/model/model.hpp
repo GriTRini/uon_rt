@@ -32,7 +32,7 @@ private:
     std::string m_model_name;
     angles_t m_min_angles, m_max_angles;
     angles_t m_min_angvels, m_max_angvels;
-    angles_t m_min_angaccs, m_max_angaccs;
+    angles_t m_min_angaccs, m_max_angaccs, m_max_attrl_angaccs; // 🌟 AttrL 전용 최대 가속도
     
     // 🌟 핵심: 로봇의 뼈대 구조 (팔 길이, 회전축 방향 등이 담긴 배열)
     std::array<Joint, 6> m_joints;
@@ -50,6 +50,7 @@ public:
             m_min_angles = m1013::MIN_ANGLES; m_max_angles = m1013::MAX_ANGLES;
             m_min_angvels = m1013::MIN_ANGVELS; m_max_angvels = m1013::MAX_ANGVELS;
             m_min_angaccs = m1013::MIN_ANGACCS; m_max_angaccs = m1013::MAX_ANGACCS;
+            m_max_attrl_angaccs = m1013::MAX_ATTRL_ANGACCS; // 🌟 AttrL 전용 가속도 리밋
             
             // 여기서 해당 로봇만의 물리적 거리(Link)와 회전축(Joint) 정보가 복사됩니다!
             m_joints = m1013::joints; 
@@ -173,6 +174,7 @@ public:
     [[nodiscard]] const angles_t& get_max_angvels() const noexcept { return m_max_angvels; }
     [[nodiscard]] const angles_t& get_min_angaccs() const noexcept { return m_min_angaccs; }
     [[nodiscard]] const angles_t& get_max_angaccs() const noexcept { return m_max_angaccs; }
+    [[nodiscard]] const angles_t& get_max_attrl_angaccs() const noexcept { return m_max_attrl_angaccs; }
 };
 
 } // namespace model
