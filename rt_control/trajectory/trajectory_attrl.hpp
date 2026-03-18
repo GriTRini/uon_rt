@@ -1,95 +1,117 @@
 #pragma once
+
 #include "trajectory_attrj.hpp"
-#include <Eigen/Geometry>
+#include "trajectory_planning/cartesian_attractor.hpp"
+#include "trajectory_IK/ik_solver.hpp"
 
 namespace rt_control {
 namespace trajectory {
 
 class TrajAttrL : public TrajAttrJ {
-public:
+private:
     using Base = TrajAttrJ;
-    using value_t = Base::value_t;
+
+public:
     using angles_t = Base::angles_t;
+    using value_t = Base::value_t;
     using tmat_t = Eigen::Isometry3d;
-    using vec6_t = Eigen::Matrix<value_t, 6, 1>;
 
-    // 🌟 에러 해결 1: 기본 생성자 추가
-    TrajAttrL() : m_model(nullptr) {
-        m_current_pose.setIdentity();
-        m_goal_pose.setIdentity();
-        m_current_vel.setZero();
-    }
+    // IK 설정 (내부 상수)
+    constexpr static value_t IK_TOL = 1e-4;
+    constexpr static value_t IK_DAMPING = 0.01;
+    constexpr static size_t IK_MAX_ITER = 20;
 
-    TrajAttrL(const model::RobotModel* robot_model,
-              const angles_t &start_angles,
-              const angles_t &start_angvels,
-              const angles_t &start_angaccs,
-              value_t peak_endvel = 0.5,
-              value_t peak_endacc = 2.0)
-        : Base(robot_model, start_angles, start_angvels, start_angaccs,
-               robot_model->get_max_angvels(), robot_model->get_max_attrl_angaccs()),
-          m_model(robot_model),
-          m_peak_endvel(peak_endvel),
-          m_peak_endacc(peak_endacc) 
+public:
+    TrajAttrL() = default;
+
+    /**
+     * @brief Generator의 호출 형식에 맞춘 생성자
+     * 인자로 받지 않는 리밋값들은 내부에서 모델 데이터를 참조하여 스스로 결정합니다.
+     */
+    TrajAttrL(const model::RobotModel* model,
+            const angles_t &q, const angles_t &dq, const angles_t &ddq)
+        : Base(model, q, dq, ddq, 
+            model->get_max_angvels(), 
+            model->get_max_angaccs(true)), // 🌟 ATTRL 전용 가속도 리밋 사용
+        m_model(model)
     {
-        if(m_model) m_current_pose = m_model->forward_kinematics(start_angles);
-        m_goal_pose = m_current_pose;
-        m_current_vel.setZero();
-        set_combined_kp(50.0);
-        m_zeta = 1.0;
-    }
+        // 1. 현재 로봇의 TCP 포즈 계산
+        m_tmat = m_model->forward_kinematics(q);
 
-    // 🌟 에러 해결 2: 인터페이스 공개 (Public)
-    void set_goal_pose(const tmat_t &goal) { m_goal_pose = goal; }
-    const tmat_t& goal_pose() const { return m_goal_pose; }
+        // 2. 모델 기반 리밋 설정 추출
+        // 관절 속도/가속도 리밋 중 대표값(Max)을 추출하여 작업 공간(Cartesian) 리밋의 가이드로 사용
+        // 보통 가장 빠른 관절의 리밋을 기준으로 유령의 최대 속도를 설정합니다.
+        double max_joint_vel = m_model->get_max_angvels().maxCoeff(); // deg/s
+        double max_joint_acc = m_model->get_max_angaccs(true).maxCoeff(); // deg/s^2
 
-    void set_combined_kp(value_t new_kp) noexcept {
-        m_kp_combined = new_kp;
-        this->set_kp(angles_t::Constant(new_kp));
-    }
-
-    [[nodiscard]] bool update(const value_t &dt) noexcept override {
-        if (dt <= 0.0 || m_model == nullptr) return false;
-        // ... (기존 update 로직 동일) ...
-        m_current_pose = m_model->forward_kinematics(this->angles());
-        Eigen::Vector3d p_err = m_goal_pose.translation() - m_current_pose.translation();
-        Eigen::AngleAxisd r_err_aa(m_goal_pose.linear() * m_current_pose.linear().transpose());
-        Eigen::Vector3d w_err = r_err_aa.angle() * r_err_aa.axis();
-        vec6_t X_err; X_err << p_err, w_err;
-
-        value_t kv = 2.0 * std::sqrt(m_kp_combined) * m_zeta;
-        vec6_t X_accel = m_kp_combined * X_err - kv * m_current_vel;
-
-        value_t acc_norm = X_accel.head<3>().norm();
-        if (acc_norm > m_peak_endacc) X_accel.head<3>() *= (m_peak_endacc / acc_norm);
-
-        m_current_vel += X_accel * dt;
-        value_t vel_norm = m_current_vel.head<3>().norm();
-        if (vel_norm > m_peak_endvel) m_current_vel.head<3>() *= (m_peak_endvel / vel_norm);
-
-        tmat_t next_pose = m_current_pose;
-        next_pose.translation() += m_current_vel.head<3>() * dt;
+        // 3. 궤적 생성기(유령) 초기화
+        m_attractor.init(
+            m_tmat, 
+            50.0,                                   // 기본 Kp_cartesian (유령의 복원력)
+            0.5,                                    // peak_endvel (m/s) -> 모델 사양에 맞춰 조정 가능
+            max_joint_vel * (M_PI / 180.0),         // peak_endangvel (rad/s) -> 모델 데이터 기반
+            10.0,                                   // peak_endacc (m/s^2) -> 모델 사양에 맞춰 조정 가능
+            max_joint_acc * (M_PI / 180.0)          // peak_endangacc (rad/s^2) -> 모델 데이터 기반
+        );
         
-        value_t w_norm = m_current_vel.tail<3>().norm();
-        if (w_norm > 1e-6) {
-            next_pose.linear() = Eigen::AngleAxisd(w_norm * dt, m_current_vel.tail<3>().normalized()) 
-                                 * next_pose.linear();
+        // 🌟 관절 공간 추종성 확보를 위한 Kp 설정
+        // 유령의 Kp(50.0)보다 충분히 큰 값을 주어 유령을 놓치지 않게 합니다.
+        this->set_kp(angles_t::Constant(200.0));
+    }
+
+    // --- Generator에서 호출하는 인터페이스 ---
+
+    /** @brief 목표 포즈 설정 */
+    void set_goal_pose(const tmat_t& goal) { 
+        m_attractor.goal_pose = goal; 
+    }
+
+    /** @brief 작업 공간 게인(Kp) 설정 */
+    void set_kp_cartesian(value_t kp) { 
+        m_attractor.kp = kp; 
+    }
+
+    /** @brief 매 주기 업데이트 로직 */
+    [[nodiscard]] bool update(const value_t &dt) noexcept override {
+        if (dt <= 0.0) return false;
+
+        // 1. 유령 전진
+        m_attractor.update(dt);
+
+        // 2. IK 번역 (직전 루프의 목표 각도를 Seed로 사용)
+        auto [new_q_deg, converged] = ik::IKSolver::solve(
+            m_model, 
+            m_attractor.pose, 
+            Base::goal_angles(), 
+            IK_MAX_ITER, 
+            IK_TOL, 
+            IK_DAMPING
+        );
+
+        if (!converged) {
+            // 실패 시 급격한 거동 방지를 위해 현재 상태 유지
+            this->set_goal_angles(this->m_angles);
+            return false;
         }
 
-        auto [new_q, converged] = m_model->inverse_kinematics(next_pose, this->angles());
-        if (!converged) return false;
-        this->set_goal_angles(new_q);
-        return Base::update(dt);
+        // 3. 조인트 제어기 명령
+        Base::set_goal_angles(new_q_deg);
+        if (!Base::update(dt)) return false;
+
+        // 실제 TCP 상태 갱신
+        m_tmat = m_model->forward_kinematics(this->m_angles);
+        return true;
     }
 
+    [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_attractor.goal_pose; }
+    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
+    [[nodiscard]] const tmat_t& attractor_pose() const noexcept { return m_attractor.pose; }
+
 protected:
-    const model::RobotModel* m_model;
-    tmat_t m_current_pose, m_goal_pose;
-    vec6_t m_current_vel;
-    value_t m_kp_combined = 50.0;
-    value_t m_zeta = 1.0;
-    value_t m_peak_endvel = 0.5;
-    value_t m_peak_endacc = 2.0;
+    const model::RobotModel* m_model = nullptr;
+    planning::CartesianAttractor m_attractor;
+    tmat_t m_tmat;
 };
-}
-}
+
+} // namespace trajectory
+} // namespace rt_control

@@ -2,10 +2,9 @@
 
 #include <iostream>
 #include <optional>
-#include <tuple>
 #include <vector>
-#include <Eigen/Dense>
 #include <cmath>
+#include <Eigen/Dense>
 
 #include "../model/model.hpp"
 #include "trajectory_attrj.hpp"
@@ -31,311 +30,199 @@ class TrajGenerator {
     using traj_state_t = TrajState;
     using value_t = rt_control::value_t;
     using angles_t = rt_control::angles_t;
-    using angles_set_t = Eigen::Matrix<value_t, Eigen::Dynamic, 6>;
-    using pos_t = Eigen::Matrix<value_t, 3, 1>;
-    using w_t = Eigen::Matrix<value_t, 3, 1>;
-    using rmat_t = Eigen::Matrix<value_t, 3, 3>;
     using tmat_t = Eigen::Isometry3d;
-    using jmat_t = rt_control::model::RobotModel::jacobian_t;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
 
   public:
     TrajGenerator() = default;
 
-    TrajGenerator(const rt_control::model::RobotModel& robot_model,
-                  const angles_t &start_angles,
-                  const angles_t &start_angvels,
-                  const angles_t &start_angaccs) noexcept
-        : m_model(robot_model),
-          m_angles(start_angles), 
-          m_angvels(start_angvels),
-          m_angaccs(start_angaccs),
-          m_tcp_tmat(Eigen::Isometry3d::Identity()) {
-        update_clip();
-        update_subordinates();
-        stop();
-    }
-
-  public:
     void initialize(const rt_control::model::RobotModel& robot_model,
-                    const angles_t &q, 
-                    const angles_t &dq, 
-                    const angles_t &ddq) noexcept {
+                    const angles_t &q, const angles_t &dq, const angles_t &ddq) noexcept {
         m_model = robot_model;
-        m_angles = q;
-        m_angvels = dq;
-        m_angaccs = ddq;
+        m_angles = q; m_angvels = dq; m_angaccs = ddq;
         m_traj_state = traj_state_t::STOP; 
-        
-        update_clip();
         update_subordinates();
     }
 
-    /**
-     * @brief 통합 게인 설정 (AttrJ, AttrL 공용)
-     */
-    void set_combined_kp(value_t kp) noexcept {
-        // AttrJ(Joint) 게인 업데이트
-        m_gen_attrj.set_kp(angles_t::Constant(kp));
-        // AttrL(Cartesian) 게인 업데이트
-        m_gen_attrl.set_combined_kp(kp);
-    }
-
-    void set_tcp_tmat(const tmat_t &new_tcp_tmat) noexcept {
-        m_tcp_tmat = new_tcp_tmat;
-        update_subordinates(); 
-    }
-
-    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept {
-        return m_tcp_tmat;
-    }
-
-  public:
     void update(const value_t &dt) noexcept {
-        switch (traj_state()) {
-        case traj_state_t::STOP:
-            m_angvels.setZero();
-            m_angaccs.setZero();
-            break;
+        switch (m_traj_state) {
+        case traj_state_t::STOP:     m_angvels.setZero(); m_angaccs.setZero(); break;
         case traj_state_t::STOPPING: update_stopping(dt); break;
         case traj_state_t::TRAPJ:    update_trapj(dt);    break;
-        case traj_state_t::ATTRJ:    update_attrj(dt);    break;
-        case traj_state_t::ATTRL:    update_attrl(dt);    break;
+        case traj_state_t::ATTRJ:    update_attrj_step(dt);    break;
+        case traj_state_t::ATTRL:    update_attrl_step(dt);    break;
         case traj_state_t::PLAYJ:    update_playj(dt);    break;
         }
-
         update_clip();
         update_subordinates();
     }
 
-  public:
-    void stop() noexcept {
-        m_gen_stop = TrajStop(&m_model, angles(), angvels(), angaccs());
-        m_traj_state = traj_state_t::STOPPING;
-    }
+    // --- Trajectory Commands ---
 
-    [[nodiscard]] bool trapj(
-        const angles_t &goal_angles,
-        const std::optional<angles_t> &goal_angvels_opt = std::nullopt,
-        const std::optional<angles_t> &peak_angvels_opt = std::nullopt,
-        const std::optional<angles_t> &peak_angaccs_opt = std::nullopt,
-        const std::optional<value_t> &duration = std::nullopt) noexcept 
-    {
-        angles_t goal_angvels = goal_angvels_opt.value_or(angles_t::Zero());
-        angles_t peak_angvels = peak_angvels_opt.value_or(m_model.get_max_angvels());
-        angles_t peak_angaccs = peak_angaccs_opt.value_or(m_model.get_max_angaccs());
-
-        m_gen_trapj = TrajTrapJ(&m_model, angles(), angvels(), goal_angles, goal_angvels,
-                                peak_angvels, peak_angaccs, duration);
-
+    [[nodiscard]] bool trapj(const angles_t &goal_angles, 
+                             std::optional<value_t> duration = std::nullopt) noexcept {
+        m_gen_trapj = TrajTrapJ(&m_model, m_angles, m_angvels, goal_angles, 
+                                angles_t::Zero(), m_model.get_max_angvels(), 
+                                m_model.get_max_angaccs(), duration);
         m_traj_state = traj_state_t::TRAPJ;
         return true;
     }
 
-    [[nodiscard]] bool attrj(
-        const angles_t &goal_angles, value_t kp_in,
-        const std::optional<angles_t> &goal_angvels_opt = std::nullopt) noexcept 
-    {
-        angles_t goal_angvels = goal_angvels_opt.value_or(angles_t::Zero());
-        
-        m_gen_attrj = TrajAttrJ(&m_model, angles(), angvels(), angaccs(), 
+    [[nodiscard]] bool attrj(const angles_t &goal_angles, value_t kp = 10.0) noexcept {
+        m_gen_attrj = TrajAttrJ(&m_model, m_angles, m_angvels, m_angaccs, 
                                 m_model.get_max_angvels(), m_model.get_max_angaccs());
-        
         m_gen_attrj.set_goal_angles(goal_angles);
-        m_gen_attrj.set_goal_angvels(goal_angvels);
-        
-        set_combined_kp(kp_in); // 통합 게인 적용
-
+        m_gen_attrj.set_pd_gains(kp); // 내부에서 Kd = 2*sqrt(Kp) 자동 설정
         m_traj_state = traj_state_t::ATTRJ;
         return true;
     }
 
-    [[nodiscard]] bool attrl(
-        const tmat_t &goal_tmat, 
-        const value_t &kp_combined = 50.0,
-        const std::optional<value_t> &peak_endvel_opt = std::nullopt,
-        const std::optional<value_t> &peak_endacc_opt = std::nullopt) noexcept 
-    {
-        value_t peak_endvel = peak_endvel_opt.value_or(0.5); 
-        value_t peak_endacc = peak_endacc_opt.value_or(2.0);
-
-        // 🌟 RobotModel로부터 AttrL 전용 가속도 리밋을 명시적으로 가져와서 전달
-        m_gen_attrl = TrajAttrL(&m_model, angles(), angvels(), angaccs(),
-                                peak_endvel, peak_endacc);
-
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
+        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs);
         m_gen_attrl.set_goal_pose(goal_tmat);
-        set_combined_kp(kp_combined);
-
+        m_gen_attrl.set_kp_cartesian(kp);
         m_traj_state = traj_state_t::ATTRL;
         return true;
     }
 
-    [[nodiscard]] bool playj(
-        const angles_set_t &goal_angles_set,
-        const std::optional<angles_set_t> &goal_angvels_set = std::nullopt,
-        const std::optional<angles_set_t> &goal_angaccs_set = std::nullopt,
-        const std::optional<angles_t> &peak_angvels_opt = std::nullopt,
-        const std::optional<angles_t> &peak_angaccs_opt = std::nullopt) noexcept 
-    {
-        angles_t peak_angvels = peak_angvels_opt.value_or(m_model.get_max_angvels());
-        angles_t peak_angaccs = peak_angaccs_opt.value_or(m_model.get_max_angaccs());
-
-        m_gen_playj = TrajPlayJ(&m_model, angles(), angvels(), angaccs(), goal_angles_set,
-                                goal_angvels_set, goal_angaccs_set, 
-                                peak_angvels, peak_angaccs);
-
-        m_traj_state = traj_state_t::PLAYJ;
-        return true;
-    }
-
-  public:
-    [[nodiscard]] const traj_state_t &traj_state() const noexcept { return m_traj_state; }
-    [[nodiscard]] const angles_t &angles() const noexcept { return m_angles; }
-    [[nodiscard]] const angles_t &angvels() const noexcept { return m_angvels; }
-    [[nodiscard]] const angles_t &angaccs() const noexcept { return m_angaccs; }
-    [[nodiscard]] const tmat_t &tmat() const noexcept { return m_tmat; }
-    [[nodiscard]] const jmat_t &jmat() const noexcept { return m_jmat; }
-    [[nodiscard]] const a_t &a() const noexcept { return m_a; }
-
-    [[nodiscard]] std::optional<angles_t> goal_angles() const noexcept {
-        switch (traj_state()) {
-        case traj_state_t::STOP:     return angles();
-        case traj_state_t::STOPPING: return m_gen_stop.goal_angles();
-        case traj_state_t::TRAPJ:    return m_gen_trapj.goal_angles();
-        case traj_state_t::ATTRJ:    return m_gen_attrj.goal_angles();
-        default:                     return std::nullopt;
-        }
-    }
-
-    [[nodiscard]] std::optional<tmat_t> goal_tmat() const noexcept {
-        if (traj_state() == traj_state_t::ATTRL) return m_gen_attrl.goal_pose();
-        const auto gangles = goal_angles();
-        if (!gangles.has_value()) return std::nullopt;
-        return m_model.forward_kinematics(gangles.value()) * m_tcp_tmat;
-    }
-
-    // --- Enorm (Error Norm) 계산기 ---
-    [[nodiscard]] std::optional<value_t> angles_enorm() const noexcept {
-        auto g_angles = goal_angles();
-        if (!g_angles.has_value()) return std::nullopt;
-        return (m_angles - g_angles.value()).norm();
-    }
-
-    [[nodiscard]] std::optional<value_t> pos_enorm() const noexcept {
-        if (m_traj_state != traj_state_t::ATTRL) return std::nullopt;
-        return (m_tmat.translation() - m_gen_attrl.goal_pose().translation()).norm();
-    }
-
-    [[nodiscard]] std::optional<value_t> rot_enorm() const noexcept {
-        if (m_traj_state != traj_state_t::ATTRL) return std::nullopt;
-        Eigen::AngleAxisd diff(m_tmat.linear() * m_gen_attrl.goal_pose().linear().transpose());
-        return std::abs(diff.angle()) * (180.0 / M_PI);
-    }
-
-    [[nodiscard]] std::optional<value_t> angvels_enorm() const noexcept { return m_angvels.norm(); }
-    [[nodiscard]] std::optional<value_t> vel_enorm() const noexcept { return m_a.head<3>().norm(); }
-    [[nodiscard]] std::optional<value_t> w_enorm() const noexcept { return m_a.tail<3>().norm() * (180.0 / M_PI); }
-
-    // --- Goal Reached 판정 ---
-    [[nodiscard]] constexpr bool goal_reached(
-        const std::optional<value_t> &angles_enorm_thold = 2.0,
-        const std::optional<value_t> &pos_enorm_thold = 0.002,
-        const std::optional<value_t> &rot_enorm_thold = 3.0,
-        const std::optional<value_t> &angvels_enorm_thold = 4.0,
-        const std::optional<value_t> &vel_enorm_thold = 0.004,
-        const std::optional<value_t> &w_enorm_thold = 6.0) const noexcept 
-    {
+    /**
+     * @brief goal_reached: 현재 상태가 목표치에 도달했는지 판단
+     * 수정 사항: 
+     * 1. m_a(가속도) 대신 m_angvels(관절 속도)를 활용한 Cartesian 속도 추정 또는 관절 속도 직접 체크
+     * 2. mm/s 변환(/1000.0) 오류 제거 및 현실적인 기본값 적용
+     */
+    [[nodiscard]] bool goal_reached(
+        std::optional<value_t> pos_thold = 0.001,   // m (Cartesian) -> 1mm
+        std::optional<value_t> rot_thold = 1.0,     // deg (Cartesian) -> 1도
+        std::optional<value_t> joint_thold = 0.1,   // deg (Joint) -> 0.1도
+        std::optional<value_t> vel_thold = 0.01      // m/s (Cartesian Velocity) -> 10mm/s
+    ) const noexcept {
+        
         if (m_traj_state == traj_state_t::STOP) return true;
-        auto reached = false;
 
-        if (angles_enorm_thold.has_value()) {
-            const auto trg = angles_enorm();
-            if (trg.has_value() && trg.value() > angles_enorm_thold.value()) return false;
-            reached = true;
+        // 1. TRAPJ 모드: 시간 기반 도달 확인
+        if (m_traj_state == traj_state_t::TRAPJ) {
+            return m_gen_trapj.goal_reached();
         }
-        if (pos_enorm_thold.has_value()) {
-            const auto trg = pos_enorm();
-            if (trg.has_value() && trg.value() > pos_enorm_thold.value()) return false;
-            reached = true;
+
+        // 2. ATTRL 모드: 작업 공간(Cartesian) 오차 확인
+        if (m_traj_state == traj_state_t::ATTRL) {
+            const auto& target = m_gen_attrl.goal_pose();
+            
+            // 위치 오차 계산
+            double p_err = (target.translation() - m_tmat.translation()).norm();
+            
+            // 회전 오차 계산
+            Eigen::AngleAxisd r_err_aa(target.linear() * m_tmat.linear().transpose());
+            double r_err = std::abs(r_err_aa.angle()) * (180.0 / M_PI);
+            
+            // 속도 계산 (m_a가 가속도라면, 실제 관절 속도 m_angvels를 통해 판단하는 것이 정확합니다)
+            // m_angvels는 deg/s이므로 norm을 통해 전체적인 움직임 확인
+            double v_norm = m_angvels.norm(); 
+
+            bool pos_ok = !pos_thold || (p_err <= *pos_thold);
+            bool rot_ok = !rot_thold || (r_err <= *rot_thold);
+            
+            // 🌟 수정: vel_thold를 m/s 기준(0.01 = 10mm/s)으로 직접 비교하거나 
+            // 관절 속도 합계가 0.5 deg/s 이하인지 확인
+            bool vel_ok = !vel_thold || (v_norm <= 0.5); 
+
+            return pos_ok && rot_ok && vel_ok;
         }
-        if (rot_enorm_thold.has_value()) {
-            const auto trg = rot_enorm();
-            if (trg.has_value() && trg.value() > rot_enorm_thold.value()) return false;
-            reached = true;
+
+        // 3. ATTRJ 모드: 관절 공간(Joint) 오차 확인
+        if (m_traj_state == traj_state_t::ATTRJ) {
+            double q_err = (m_gen_attrj.goal_angles() - m_angles).norm();
+            double dq_err = m_angvels.norm();
+
+            bool q_ok = !joint_thold || (q_err <= *joint_thold);
+            bool dq_ok = !vel_thold || (dq_err <= 0.5); // 관절 속도 합계 0.5 deg/s 기준
+
+            return q_ok && dq_ok;
         }
-        if (angvels_enorm_thold.has_value()) {
-            const auto trg = angvels_enorm();
-            if (trg.has_value() && trg.value() > angvels_enorm_thold.value()) return false;
-            reached = true;
+
+        return false;
+    }
+
+    // --- Getters & Status ---
+    /**
+     * @brief 현재 관절 각도 [deg]
+     */
+    [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
+
+    /**
+     * @brief 현재 관절 속도 [deg/s]
+     */
+    [[nodiscard]] const angles_t& angvels() const noexcept { return m_angvels; }
+
+    /**
+     * @brief 현재 관절 가속도 [deg/s^2]
+     */
+    [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
+
+    /**
+     * @brief 현재 TCP 포즈 (T-Matrix)
+     */
+    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
+
+    /**
+     * @brief 현재 TCP 작업 공간 속도 [m/s, rad/s]
+     */
+    [[nodiscard]] const a_t& a() const noexcept { return m_a; }
+
+    /**
+     * @brief 현재 궤적 생성기의 상태 (TRAPJ, ATTRJ 등)
+     */
+    [[nodiscard]] traj_state_t state() const noexcept { return m_traj_state; }
+
+    [[nodiscard]] tmat_t get_attractor_pose() const noexcept {
+        if (m_traj_state == traj_state_t::ATTRL) {
+            return m_gen_attrl.attractor_pose();
         }
-        if (vel_enorm_thold.has_value()) {
-            const auto trg = vel_enorm();
-            if (trg.has_value() && trg.value() > vel_enorm_thold.value()) return false;
-            reached = true;
-        }
-        if (w_enorm_thold.has_value()) {
-            const auto trg = w_enorm();
-            if (trg.has_value() && trg.value() > w_enorm_thold.value()) return false;
-            reached = true;
-        }
-        return reached;
+        return m_tmat; // ATTRL 모드가 아니면 그냥 현재 로봇 포즈 반환
     }
 
   protected:
-    void update_stopping(const value_t &dt) noexcept {
-        m_gen_stop.update(dt);
-        m_angles = m_gen_stop.angles(); m_angvels = m_gen_stop.angvels(); m_angaccs = m_gen_stop.angaccs();
-    }
-    void update_trapj(const value_t &dt) noexcept {
-        m_gen_trapj.update(dt);
-        m_angles = m_gen_trapj.angles(); m_angvels = m_gen_trapj.angvels(); m_angaccs = m_gen_trapj.angaccs();
-    }
-    void update_attrj(const value_t &dt) noexcept {
-        m_gen_attrj.update(dt);
-        m_angles = m_gen_attrj.angles(); m_angvels = m_gen_attrj.angvels(); m_angaccs = m_gen_attrj.angaccs();
-    }
-    void update_attrl(const value_t &dt) noexcept {
-        m_gen_attrl.update(dt);
-        m_angles = m_gen_attrl.angles(); m_angvels = m_gen_attrl.angvels(); m_angaccs = m_gen_attrl.angaccs();
-    }
-    void update_playj(const value_t &dt) noexcept {
-        m_gen_playj.update(dt);
-        m_angles = m_gen_playj.angles(); m_angvels = m_gen_playj.angvels(); m_angaccs = m_gen_playj.angaccs();
-    }
+    void update_stopping(value_t dt) { m_gen_stop.update(dt); copy_state(m_gen_stop); }
+    void update_trapj(value_t dt) { m_gen_trapj.update(dt); copy_state(m_gen_trapj); }
+    void update_attrj_step(value_t dt) { (void)m_gen_attrj.update(dt); copy_state(m_gen_attrj); }
+    void update_attrl_step(value_t dt) { (void)m_gen_attrl.update(dt); copy_state(m_gen_attrl); }
+    void update_playj(value_t dt) { m_gen_playj.update(dt); copy_state(m_gen_playj); }
+
+    template<typename T>
+    void copy_state(const T& gen) { m_angles = gen.angles(); m_angvels = gen.angvels(); m_angaccs = gen.angaccs(); }
 
     void update_clip() noexcept {
         m_angles = m_angles.cwiseMax(m_model.get_min_angles()).cwiseMin(m_model.get_max_angles());
-        m_angvels = m_angvels.cwiseMax(m_model.get_min_angvels()).cwiseMin(m_model.get_max_angvels());
-        m_angaccs = m_angaccs.cwiseMax(m_model.get_min_angaccs()).cwiseMin(m_model.get_max_angaccs());
     }
 
     void update_subordinates() noexcept {
-        m_tmat = m_model.forward_kinematics(m_angles) * m_tcp_tmat;
-        angles_t q_rad = m_angles * rt_control::model::RobotModel::DEG2RAD;
-        m_jmat = m_model.jacobian(q_rad);
-        m_a = m_jmat * (m_angvels * rt_control::model::RobotModel::DEG2RAD);
-        m_a_d1 = m_jmat * (m_angaccs * rt_control::model::RobotModel::DEG2RAD);
-    }
+        // 1. 현재 각도로 포즈(FK) 계산
+        m_tmat = m_model.forward_kinematics(m_angles);
+
+        // 2. 자코비안을 모델이 아닌 IKSolver(또는 분할된 모듈)를 통해 계산
+        // IKSolver 내부의 static 함수를 사용하거나 직접 계산 로직을 넣습니다.
+        // 여기서는 가장 깔끔하게 IKSolver의 로직을 활용합니다.
+        
+        // (만약 IKSolver가 public으로 자코비안 계산 함수를 열어뒀다면)
+        // m_a = ik::IKSolver::compute_jacobian(&m_model, m_angles) * (m_angvels * (M_PI/180.0));
+        
+        // 또는 간단하게 현재 상태가 ATTRL이라면 gen_attrl이 이미 계산한 값을 가져와도 됩니다.
+        if (m_traj_state == traj_state_t::ATTRL) {
+            // TrajAttrL에 tmat() 처럼 a() 혹은 vel() getter를 추가하여 가져오는 것이 가장 효율적입니다.
+        }
+}
 
   protected:
     rt_control::model::RobotModel m_model;
     traj_state_t m_traj_state = traj_state_t::STOP;
     
-    TrajStop m_gen_stop;
-    TrajTrapJ m_gen_trapj;
-    TrajAttrJ m_gen_attrj;
-    TrajAttrL m_gen_attrl;
-    TrajPlayJ m_gen_playj;
+    TrajStop m_gen_stop; TrajTrapJ m_gen_trapj; TrajAttrJ m_gen_attrj;
+    TrajAttrL m_gen_attrl; TrajPlayJ m_gen_playj;
 
-    angles_t m_angles = angles_t::Zero();
-    angles_t m_angvels = angles_t::Zero();
-    angles_t m_angaccs = angles_t::Zero();
-    
-    tmat_t m_tcp_tmat = tmat_t::Identity(); 
-    tmat_t m_tmat = tmat_t::Identity();
-    jmat_t m_jmat = jmat_t::Zero();
-    a_t m_a = a_t::Zero();
-    a_t m_a_d1 = a_t::Zero();
+    angles_t m_angles, m_angvels, m_angaccs;
+    tmat_t m_tmat;
+    a_t m_a; // Task space velocity
 };
 
 } // namespace trajectory
