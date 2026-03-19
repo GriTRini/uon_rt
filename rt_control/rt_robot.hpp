@@ -11,9 +11,9 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <atomic>
 
 #include "timer.hpp"
-
 #include "../drfl/include/DRFLEx.h"
 
 #include "rt_data.hpp"
@@ -23,8 +23,6 @@
 
 namespace rt_control {
 
-constexpr size_t MAX_LOG_QUEUE_SIZE = 10;
-
 namespace draf = DRAFramework;
 
 template <size_t ID = 0> class Robot {
@@ -33,8 +31,12 @@ template <size_t ID = 0> class Robot {
     using angles_t = rt_control::angles_t;
     using value_t = rt_control::value_t;
     using tmat_t = Eigen::Isometry3d;
+    
+    // 🌟 RobotModel에 추가한 jacobian_t 참조
     using jmat_t = model::RobotModel::jacobian_t;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
+    
+    // 🌟 TrajGenerator에 추가한 angles_set_t 참조
     using angles_set_t = trajectory::TrajGenerator::angles_set_t;
 
   public:
@@ -51,6 +53,7 @@ template <size_t ID = 0> class Robot {
           m_is_rt_control_ready(false), 
           m_servoj_target_time(0.05) 
     {
+        // 🌟 get_model_name() 사용으로 변경
         if (m_model.get_model_name() != "m1013") {
             std::cerr << "[RT_CONTROL] Warning: 현재 두산 API는 'm1013' 모델만 지원합니다." << std::endl;
         }
@@ -71,29 +74,24 @@ template <size_t ID = 0> class Robot {
         const std::chrono::milliseconds timeout_init_tp = std::chrono::milliseconds(100),
         const std::chrono::milliseconds timeout_get_ctrl = std::chrono::milliseconds(500)) 
     {
+        // 🌟 get_model_name() 사용
         if (m_model.get_model_name() != "m1013") {
             return OpenConnError::CREATE_ROBOT_CONTROL_ERROR;
         }
 
         std::lock_guard<std::mutex> lock(m_control_mutex);
         
-        // 🌟 안전한 포인터 초기화
         if (m_control) { 
             close_and_destroy_ctrl(m_control); 
             m_control = nullptr;
         }
 
-        clear_queue(m_log_queue, m_log_queue_mutex);
-
-        // 🌟 unique_ptr 제거 및 직접 할당
         m_control = draf::_CreateRobotControl();
-
         if (!m_control) { return OpenConnError::CREATE_ROBOT_CONTROL_ERROR; }
 
         m_is_tp_initialized.store(false);
         m_has_control_right.store(false);
 
-        // 🌟 .get() 제거 (m_control 자체가 올바른 포인터)
         draf::_set_on_monitoring_speed_mode(m_control, TOnMonitoringSpeedModeCB);
         draf::_set_on_monitoring_access_control(m_control, TOnMonitoringAccessControlCB);
         draf::_set_on_log_alarm(m_control, TOnLogAlarmCB);
@@ -140,10 +138,7 @@ template <size_t ID = 0> class Robot {
         }
 
         m_control_rt = draf::_create_robot_control_udp();
-
         if (!m_control_rt) { return false; }
-
-        m_is_rt_control_ready.store(false);
 
         if (!draf::_connect_rt_control(m_control_rt, strIpAddr.c_str(), usPort)) {
             close_and_destroy_ctrl_udp(m_control_rt);
@@ -254,8 +249,9 @@ template <size_t ID = 0> class Robot {
     //////////////////////////////////////////////////////////////
 
   public:
+    // 🌟 TrajGenerator 인터페이스에 맞춰 수정
     void set_tcp_tmat(const tmat_t &new_shift_tmat) noexcept { m_traj_gen.set_tcp_tmat(new_shift_tmat); }
-    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept { return traj_gen().get_tcp_tmat(); }
+    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept { return m_traj_gen.tmat(); }
 
     [[nodiscard]] bool set_tool(const std::string &lpszSymbol) noexcept {
         if (!m_control) { return false; }
@@ -266,8 +262,6 @@ template <size_t ID = 0> class Robot {
         m_servoj_target_time = std::max(new_target_time, 0.01f);
     }
     [[nodiscard]] const float &get_servoj_target_time() const noexcept { return m_servoj_target_time; }
-
-    //////////////////////////////////////////////////////////////
 
   public:
     void stop() noexcept { m_traj_gen.stop(); }
@@ -280,6 +274,8 @@ template <size_t ID = 0> class Robot {
         const std::optional<value_t> &duration = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) { return false; }
+        // 🌟 TrajGenerator의 오버로딩된 trapj 호출
+        std::cout << "[Robot] trapj called with goal_angles: " << goal_angles.transpose() << std::endl;
         return m_traj_gen.trapj(goal_angles, goal_angvels, peak_angvels, peak_angaccs, duration);
     }
 
@@ -288,6 +284,7 @@ template <size_t ID = 0> class Robot {
         const std::optional<angles_t> &goal_angvels = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) { return false; }
+        // 🌟 TrajGenerator의 오버로딩된 attrj 호출
         return m_traj_gen.attrj(goal_angles, kp, goal_angvels);
     }
 
@@ -297,6 +294,7 @@ template <size_t ID = 0> class Robot {
         const std::optional<value_t> &peak_endacc = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) { return false; }
+        // 🌟 TrajGenerator의 오버로딩된 attrl 호출
         return m_traj_gen.attrl(goal_tmat, kp_cartesian, peak_endvel, peak_endacc);
     }
 
@@ -317,8 +315,6 @@ template <size_t ID = 0> class Robot {
         return wait_for([&]() { return get_goal_reached(); }, timeout, std::chrono::milliseconds(1));
     }
 
-    //////////////////////////////////////////////////////////////
-
   public:
     [[nodiscard]] std::optional<ROBOT_STATE> get_robot_state() const noexcept {
         if (!m_control) { return std::nullopt; }
@@ -337,12 +333,13 @@ template <size_t ID = 0> class Robot {
         return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
     }
 
-    //////////////////////////////////////////////////////////////
-    [[nodiscard]] const auto &get_traj_state() const noexcept { return traj_gen().traj_state(); }
-    [[nodiscard]] const auto &get_desired_angles() const noexcept { return traj_gen().angles(); }
-    [[nodiscard]] const auto &get_desired_angvels() const noexcept { return traj_gen().angvels(); }
-    [[nodiscard]] const auto &get_desired_angaccs() const noexcept { return traj_gen().angaccs(); }
-    [[nodiscard]] bool get_goal_reached() const noexcept { return traj_gen().goal_reached(); }
+    [[nodiscard]] const angles_t &get_desired_angles() const noexcept { return m_traj_gen.angles(); }
+    [[nodiscard]] const angles_t &get_desired_angvels() const noexcept { return m_traj_gen.angvels(); }
+    [[nodiscard]] const angles_t &get_desired_angaccs() const noexcept { return m_traj_gen.angaccs(); }
+    [[nodiscard]] bool get_goal_reached() const noexcept { return m_traj_gen.goal_reached(); }
+
+    // 🌟 RobotModel의 메서드 호출
+    std::string get_model_name() const { return m_model.get_model_name(); }
 
   protected:
     void update() {
@@ -363,7 +360,7 @@ template <size_t ID = 0> class Robot {
             q_d1[i] = static_cast<float>(des_dq(i));
             q_d2[i] = static_cast<float>(des_ddq(i));
         }
-
+        
         draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, get_servoj_target_time());
     }
 
@@ -424,15 +421,11 @@ template <size_t ID = 0> class Robot {
         return false;
     }
 
-  public:
-    [[nodiscard]] const traj_gen_t &traj_gen() const noexcept { return m_traj_gen; }
-
   private:
     static Robot<ID> *m_robot_instance;
     rt_control::model::RobotModel m_model; 
     traj_gen_t m_traj_gen;
 
-    // 🌟 안전한 Raw 포인터로 변경 완료
     draf::LPROBOTCONTROL m_control = nullptr;
     std::mutex m_control_mutex;
     draf::LPROBOTCONTROL m_control_rt = nullptr;
