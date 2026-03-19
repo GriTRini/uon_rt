@@ -1,0 +1,1 @@
+g++ -std=c++20 -O3 trapj_api.cpp -o trapj_api     -I/usr/include/eigen3     -I/home/uon/uon_rt/drfl/include     -L/home/uon/uon_rt/drfl/library/Linux/64bits/amd64/24.04     -lDRFL -lPocoNet -lPocoFoundation -lpthread -lrt
