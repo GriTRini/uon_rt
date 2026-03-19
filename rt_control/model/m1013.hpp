@@ -48,10 +48,6 @@ inline const angles_t MIN_ANGVELS = -MAX_ANGVELS;
 inline const angles_t MAX_ANGACCS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
 inline const angles_t MIN_ANGACCS = -MAX_ANGACCS;
 
-// 🌟 AttrL 전용 상향된 각가속도 (10배)
-inline const angles_t MAX_ATTRL_ANGACCS = (angles_t() << 1200, 1200, 1800, 2250, 2250, 2550).finished();
-inline const angles_t MIN_ATTRL_ANGACCS = -MAX_ATTRL_ANGACCS;
-
 // --- 3D 기구학 파라미터 (DH 파라미터 대체) ---
 inline const std::array<Joint, 6> joints = {
     Joint{JointID::joint1, LinkID::base, LinkID::link1,

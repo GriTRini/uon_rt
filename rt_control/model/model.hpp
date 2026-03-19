@@ -18,7 +18,6 @@ private:
     angles_t m_min_angles, m_max_angles;
     angles_t m_min_angvels, m_max_angvels;
     angles_t m_min_angaccs, m_max_angaccs;
-    angles_t m_min_attrl_angaccs, m_max_attrl_angaccs;
     
     // 🌟 조인트 구성 정보 (IK 모듈에서 참조함)
     std::array<Joint, 6> m_joints;
@@ -33,8 +32,6 @@ public:
             m_min_angles = m1013::MIN_ANGLES; m_max_angles = m1013::MAX_ANGLES;
             m_min_angvels = m1013::MIN_ANGVELS; m_max_angvels = m1013::MAX_ANGVELS;
             m_min_angaccs = m1013::MIN_ANGACCS; m_max_angaccs = m1013::MAX_ANGACCS;
-            m_min_attrl_angaccs = m1013::MIN_ATTRL_ANGACCS; 
-            m_max_attrl_angaccs = m1013::MAX_ATTRL_ANGACCS;
             m_joints = m1013::joints;
         }
     }
@@ -54,9 +51,8 @@ public:
     const angles_t& get_min_angles() const { return m_min_angles; }
     const angles_t& get_max_angles() const { return m_max_angles; }
     const angles_t& get_max_angvels() const { return m_max_angvels; }
-    const angles_t& get_max_angaccs(bool is_attrl = false) const { 
-        return is_attrl ? m_max_attrl_angaccs : m_max_angaccs; 
-    }
+    const angles_t& get_max_angaccs(bool is_attrl = false) const { return m_max_angaccs; }
+    
 };
 
 } // namespace model
