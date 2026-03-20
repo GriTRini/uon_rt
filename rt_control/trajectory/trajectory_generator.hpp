@@ -1,10 +1,12 @@
 #pragma once
 
+#include "../core/core.hpp"
+#include <Eigen/Geometry>
+#include <array>
 #include <iostream>
 #include <optional>
 #include <vector>
 #include <cmath>
-#include <Eigen/Dense>
 
 #include "../model/model.hpp"
 #include "trajectory_attrj.hpp"
@@ -32,12 +34,51 @@ class TrajGenerator {
     using angles_t = rt_control::angles_t;
     using tmat_t = Eigen::Isometry3d;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-
-    // 🌟 Robot 클래스 호환을 위한 타입 정의 추가
     using angles_set_t = std::vector<angles_t>;
 
   public:
-    TrajGenerator() = default;
+    TrajGenerator() {
+        m_tcp_offset = tmat_t::Identity();
+    }
+
+    // --- 🌟 TCP (Tool Center Point) 설정 인터페이스 (Degree 지원) ---
+
+    /**
+     * @brief XYZ와 RPY(Euler angles)를 사용하여 TCP 오프셋을 설정합니다.
+     * @param x, y, z 거리 (m)
+     * @param r_deg, p_deg, yaw_deg 회전 (도, degree)
+     */
+    void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
+        m_tcp_offset = tmat_t::Identity();
+        m_tcp_offset.translation() << x, y, z;
+        
+        // Degree to Radian 변환 상수
+        const value_t d2r = M_PI / 180.0;
+        value_t r_rad = r_deg * d2r;
+        value_t p_rad = p_deg * d2r;
+        value_t y_rad = yaw_deg * d2r;
+
+        // ZYX 오더 회전 적용 (내부 연산은 라디안으로 수행)
+        m_tcp_offset.linear() = (Eigen::AngleAxisd(y_rad, Eigen::Vector3d::UnitZ()) *
+                                 Eigen::AngleAxisd(p_rad, Eigen::Vector3d::UnitY()) *
+                                 Eigen::AngleAxisd(r_rad, Eigen::Vector3d::UnitX())).toRotationMatrix();
+        
+        update_subordinates();
+        
+        std::cout << "[TrajGen] TCP Set (deg): XYZ(" << x << ", " << y << ", " << z << ") "
+                  << "RPY(" << r_deg << ", " << p_deg << ", " << yaw_deg << ")" << std::endl;
+    }
+
+    void set_tcp_tmat(const tmat_t& new_tcp_offset) noexcept {
+        m_tcp_offset = new_tcp_offset;
+        update_subordinates();
+    }
+
+    [[nodiscard]] tmat_t get_tcp_offset() const noexcept {
+        return m_tcp_offset;
+    }
+
+    // --- 초기화 및 업데이트 ---
 
     void initialize(const rt_control::model::RobotModel& robot_model,
                     const angles_t &q, const angles_t &dq, const angles_t &ddq) noexcept {
@@ -60,15 +101,13 @@ class TrajGenerator {
         update_subordinates();
     }
 
-    // --- Trajectory Commands (Robot 클래스 호환용 오버로딩 추가) ---
+    // --- Trajectory Commands ---
 
-    // 🌟 Robot 클래스가 호출하는 5개 인자 trapj 지원
     [[nodiscard]] bool trapj(const angles_t &goal_angles, 
                              const std::optional<angles_t>& goal_angvels = std::nullopt,
                              const std::optional<angles_t>& peak_angvels = std::nullopt,
                              const std::optional<angles_t>& peak_angaccs = std::nullopt,
                              const std::optional<value_t>& duration = std::nullopt) noexcept {
-        // 내부적으로는 우리가 만든 2개 인자 버전 호출
         m_gen_trapj = TrajTrapJ(&m_model, m_angles, m_angvels, goal_angles, 
                                 angles_t::Zero(), m_model.get_max_angvels(), 
                                 m_model.get_max_angaccs(), duration);
@@ -76,7 +115,6 @@ class TrajGenerator {
         return true;
     }
 
-    // 🌟 Robot 클래스가 호출하는 3개 인자 attrj 지원
     [[nodiscard]] bool attrj(const angles_t &goal_angles, value_t kp = 10.0,
                              const std::optional<angles_t>& goal_angvels = std::nullopt) noexcept {
         m_gen_attrj = TrajAttrJ(&m_model, m_angles, m_angvels, m_angaccs, 
@@ -87,35 +125,30 @@ class TrajGenerator {
         return true;
     }
 
-    // 🌟 Robot 클래스가 호출하는 4개 인자 attrl 지원
-    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0,
-                             const std::optional<value_t>& peak_endvel = std::nullopt,
-                             const std::optional<value_t>& peak_endacc = std::nullopt) noexcept {
-        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs);
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
+        // 🌟 현재 Generator가 들고 있는 m_tcp_offset을 생성자로 전달
+        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
+        
+        // 이제 TrajAttrL에 해당 함수들이 있으므로 에러가 사라집/니다.
         m_gen_attrl.set_goal_pose(goal_tmat);
         m_gen_attrl.set_kp_cartesian(kp);
+        
         m_traj_state = traj_state_t::ATTRL;
         return true;
     }
 
-    // 🌟 Robot 클래스가 호출하는 누락된 함수 인터페이스 추가
     void stop() noexcept { m_traj_state = traj_state_t::STOP; }
-    
-    void set_tcp_tmat(const tmat_t& new_shift_tmat) noexcept {
-        // 필요 시 모델 혹은 내부 tmat 보정 로직 추가
-    }
 
     [[nodiscard]] bool playj(const angles_set_t &goal_angles_set,
                              const std::optional<angles_set_t> &goal_angvels_set = std::nullopt,
                              const std::optional<angles_set_t> &goal_angaccs_set = std::nullopt,
                              const std::optional<angles_t> &peak_angvels = std::nullopt,
                              const std::optional<angles_t> &peak_angaccs = std::nullopt) noexcept {
-        // PlayJ 엔진이 있다면 여기서 연동, 현재는 상태만 변경
         m_traj_state = traj_state_t::PLAYJ;
         return true;
     }
 
-    // --- Error Norm Helpers & goal_reached (기존 코드 유지) ---
+    // --- Error Norm Helpers & goal_reached ---
     [[nodiscard]] std::optional<value_t> angles_enorm() const noexcept {
         if (m_traj_state == traj_state_t::TRAPJ) return (m_gen_trapj.goal_angles() - m_angles).norm();
         if (m_traj_state == traj_state_t::ATTRJ) return (m_gen_attrj.goal_angles() - m_angles).norm();
@@ -123,7 +156,8 @@ class TrajGenerator {
     }
 
     [[nodiscard]] std::optional<value_t> pos_enorm() const noexcept {
-        if (m_traj_state == traj_state_t::ATTRL) return (m_gen_attrl.goal_pose().translation() - m_tmat.translation()).norm();
+        if (m_traj_state == traj_state_t::ATTRL) 
+            return (m_gen_attrl.goal_pose().translation() - m_tmat.translation()).norm();
         return std::nullopt;
     }
 
@@ -172,8 +206,6 @@ class TrajGenerator {
     [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
     [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
     [[nodiscard]] value_t duration() const noexcept { return (m_traj_state == traj_state_t::TRAPJ) ? m_gen_trapj.duration() : 0.0; }
-    [[nodiscard]] const std::vector<TrajTrapJ::Profile>& get_trapj_profiles() const { return m_gen_trapj.get_profiles(); }
-    
 
   protected:
     void update_stopping(value_t dt) { m_gen_stop.update(dt); copy_state(m_gen_stop); }
@@ -190,7 +222,9 @@ class TrajGenerator {
     }
 
     void update_subordinates() noexcept {
-        m_tmat = m_model.forward_kinematics(m_angles);
+        // 🌟 모니터링용 tmat 계산 시에도 TCP 반영
+        auto [tcp_pose, J] = ik::compute_forward_and_jacobian(&m_model, m_angles, m_tcp_offset);
+        m_tmat = tcp_pose;
     }
 
   protected:
@@ -202,6 +236,7 @@ class TrajGenerator {
 
     angles_t m_angles, m_angvels, m_angaccs;
     tmat_t m_tmat;
+    tmat_t m_tcp_offset; 
     a_t m_a = a_t::Zero(); 
 };
 

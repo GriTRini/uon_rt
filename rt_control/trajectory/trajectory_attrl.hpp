@@ -1,11 +1,9 @@
 #pragma once
-
 #include "trajectory_attrj.hpp"
 #include "trajectory_planning/cartesian_attractor.hpp"
 #include "trajectory_IK/ik_solver.hpp"
 
-namespace rt_control {
-namespace trajectory {
+namespace rt_control::trajectory {
 
 class TrajAttrL : public TrajAttrJ {
 private:
@@ -16,74 +14,47 @@ public:
     using value_t = Base::value_t;
     using tmat_t = Eigen::Isometry3d;
 
-    constexpr static value_t IK_TOL = 1e-4;
-    constexpr static value_t IK_DAMPING = 0.01;
-    constexpr static size_t IK_MAX_ITER = 20;
-
-public:
     TrajAttrL() = default;
 
-    TrajAttrL(const model::RobotModel* model,
-            const angles_t &q, const angles_t &dq, const angles_t &ddq)
-        : Base(model, q, dq, ddq, 
-            model->get_max_angvels(), 
-            model->get_max_angaccs(true)),
-        m_model(model)
-    {
-        m_tmat = m_model->forward_kinematics(q);
-        double max_joint_vel = m_model->get_max_angvels().maxCoeff();
-        double max_joint_acc = m_model->get_max_angaccs(true).maxCoeff();
-
-        m_attractor.init(
-            m_tmat, 
-            50.0,
-            0.5,
-            max_joint_vel * (M_PI / 180.0),
-            10.0,
-            max_joint_acc * (M_PI / 180.0)
-        );
-        this->set_kp(angles_t::Constant(200.0));
+    TrajAttrL(const model::RobotModel* model, const angles_t &q, const angles_t &dq, 
+              const angles_t &ddq, const Eigen::Isometry3d& tcp_offset)
+        : Base(model, q, dq, ddq, model->get_max_angvels(), model->get_max_angaccs(true)),
+          m_model(model), m_tcp_offset(tcp_offset) {
+        
+        auto [initial_pose, J] = ik::compute_forward_and_jacobian(m_model, q, m_tcp_offset);
+        m_tmat = initial_pose;
+        // Attractor 초기화
+        m_attractor.init(m_tmat, 40.0, 0.5, 1.0, 10.0, 2.0);
     }
 
-    void set_goal_pose(const tmat_t& goal) { 
-        m_attractor.goal_pose = goal; 
-    }
-
-    void set_kp_cartesian(value_t kp) { 
-        m_attractor.kp = kp; 
-    }
+    // 🌟 Generator에서 발생하는 에러 해결을 위한 함수명 통일
+    void set_goal_pose(const tmat_t& goal) { m_attractor.goal_pose = goal; }
+    void set_kp_cartesian(value_t kp) { m_attractor.kp = kp; }
+    
+    [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_attractor.goal_pose; }
+    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
 
     [[nodiscard]] bool update(const value_t &dt) noexcept override {
         if (dt <= 0.0) return false;
         m_attractor.update(dt);
 
-        auto [new_q_deg, converged] = ik::IKSolver::solve(
-            m_model, m_attractor.pose, Base::goal_angles(), 
-            IK_MAX_ITER, IK_TOL, IK_DAMPING
-        );
+        auto [new_q, converged] = ik::IKSolver::solve(m_model, m_attractor.pose, Base::angles(), 
+                                                      m_tcp_offset, 20, 1e-4, 0.01);
+        if (!converged) return false;
 
-        if (!converged) {
-            this->set_goal_angles(this->m_angles);
-            return false;
-        }
-
-        Base::set_goal_angles(new_q_deg);
+        Base::set_goal_angles(new_q);
         if (!Base::update(dt)) return false;
 
-        m_tmat = m_model->forward_kinematics(this->m_angles);
+        auto [cp, J] = ik::compute_forward_and_jacobian(m_model, this->m_angles, m_tcp_offset);
+        m_tmat = cp;
         return true;
     }
-
-    // --- Getters (Generator 호환용) ---
-    [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_attractor.goal_pose; }
-    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
-    [[nodiscard]] const tmat_t& attractor_pose() const noexcept { return m_attractor.pose; }
 
 protected:
     const model::RobotModel* m_model = nullptr;
     planning::CartesianAttractor m_attractor;
     tmat_t m_tmat;
+    tmat_t m_tcp_offset;
 };
 
-} // namespace trajectory
-} // namespace rt_control
+}
