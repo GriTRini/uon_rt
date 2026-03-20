@@ -32,11 +32,9 @@ template <size_t ID = 0> class Robot {
     using value_t = rt_control::value_t;
     using tmat_t = Eigen::Isometry3d;
     
-    // 🌟 RobotModel에 추가한 jacobian_t 참조
     using jmat_t = model::RobotModel::jacobian_t;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
     
-    // 🌟 TrajGenerator에 추가한 angles_set_t 참조
     using angles_set_t = trajectory::TrajGenerator::angles_set_t;
 
   public:
@@ -51,9 +49,8 @@ template <size_t ID = 0> class Robot {
           m_is_tp_initialized(false), 
           m_has_control_right(false),
           m_is_rt_control_ready(false), 
-          m_servoj_target_time(0.05) 
+          m_servoj_target_time(0.001f) // 기본 제어 주기 1ms 권장
     {
-        // 🌟 get_model_name() 사용으로 변경
         if (m_model.get_model_name() != "m1013") {
             std::cerr << "[RT_CONTROL] Warning: 현재 두산 API는 'm1013' 모델만 지원합니다." << std::endl;
         }
@@ -74,7 +71,6 @@ template <size_t ID = 0> class Robot {
         const std::chrono::milliseconds timeout_init_tp = std::chrono::milliseconds(100),
         const std::chrono::milliseconds timeout_get_ctrl = std::chrono::milliseconds(500)) 
     {
-        // 🌟 get_model_name() 사용
         if (m_model.get_model_name() != "m1013") {
             return OpenConnError::CREATE_ROBOT_CONTROL_ERROR;
         }
@@ -249,9 +245,26 @@ template <size_t ID = 0> class Robot {
     //////////////////////////////////////////////////////////////
 
   public:
-    // 🌟 TrajGenerator 인터페이스에 맞춰 수정
-    void set_tcp_tmat(const tmat_t &new_shift_tmat) noexcept { m_traj_gen.set_tcp_tmat(new_shift_tmat); }
-    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept { return m_traj_gen.tmat(); }
+    /**
+     * @brief XYZ와 RPY(Degree)를 사용하여 TCP 오프셋을 설정합니다.
+     */
+    void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
+        m_traj_gen.set_tcp(x, y, z, r_deg, p_deg, yaw_deg);
+    }
+
+    /**
+     * @brief Isometry3d 행렬을 사용하여 TCP 오프셋을 직접 설정합니다.
+     */
+    void set_tcp_tmat(const tmat_t &new_shift_tmat) noexcept { 
+        m_traj_gen.set_tcp_tmat(new_shift_tmat); 
+    }
+
+    /**
+     * @brief 현재 설정된 TCP 정보가 반영된 도구 끝단의 전역 포즈를 반환합니다.
+     */
+    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept { 
+        return m_traj_gen.tmat(); 
+    }
 
     [[nodiscard]] bool set_tool(const std::string &lpszSymbol) noexcept {
         if (!m_control) { return false; }
@@ -259,7 +272,7 @@ template <size_t ID = 0> class Robot {
     }
 
     void set_servoj_target_time(const float &new_target_time) noexcept {
-        m_servoj_target_time = std::max(new_target_time, 0.01f);
+        m_servoj_target_time = std::max(new_target_time, 0.001f);
     }
     [[nodiscard]] const float &get_servoj_target_time() const noexcept { return m_servoj_target_time; }
 
@@ -274,8 +287,6 @@ template <size_t ID = 0> class Robot {
         const std::optional<value_t> &duration = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) { return false; }
-        // 🌟 TrajGenerator의 오버로딩된 trapj 호출
-        std::cout << "[Robot] trapj called with goal_angles: " << goal_angles.transpose() << std::endl;
         return m_traj_gen.trapj(goal_angles, goal_angvels, peak_angvels, peak_angaccs, duration);
     }
 
@@ -284,20 +295,20 @@ template <size_t ID = 0> class Robot {
         const std::optional<angles_t> &goal_angvels = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) { return false; }
-        // 🌟 TrajGenerator의 오버로딩된 attrj 호출
         return m_traj_gen.attrj(goal_angles, kp, goal_angvels);
     }
 
-    [[nodiscard]] bool attrl(
-        const tmat_t &goal_tmat, const value_t &kp_cartesian = 10.0,
-        const std::optional<value_t> &peak_endvel = std::nullopt,
-        const std::optional<value_t> &peak_endacc = std::nullopt) noexcept 
-    {
-        if (!m_update_timer.is_running()) { return false; }
-        // 🌟 TrajGenerator의 오버로딩된 attrl 호출
-        return m_traj_gen.attrl(goal_tmat, kp_cartesian, peak_endvel, peak_endacc);
+    // 1️⃣ 원래 있던 행렬용 attrl 래퍼 (쉼표, 주석 제거)
+    [[nodiscard]] bool attrl(const Eigen::Isometry3d &goal_tmat, value_t kp = 50.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        return m_traj_gen.attrl(goal_tmat, kp);
     }
 
+    // 2️⃣ 새로 추가한 좌표용 attrl 래퍼
+    [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        return m_traj_gen.attrl(dx, dy, dz, kp);
+    }
     [[nodiscard]] bool playj(
         const angles_set_t &goal_angles_set,
         const std::optional<angles_set_t> &goal_angvels_set = std::nullopt,
@@ -336,9 +347,15 @@ template <size_t ID = 0> class Robot {
     [[nodiscard]] const angles_t &get_desired_angles() const noexcept { return m_traj_gen.angles(); }
     [[nodiscard]] const angles_t &get_desired_angvels() const noexcept { return m_traj_gen.angvels(); }
     [[nodiscard]] const angles_t &get_desired_angaccs() const noexcept { return m_traj_gen.angaccs(); }
-    [[nodiscard]] bool get_goal_reached() const noexcept { return m_traj_gen.goal_reached(); }
+    
+    [[nodiscard]] bool get_goal_reached(
+        const std::optional<value_t> &angles_enorm_thold = 0.1,
+        const std::optional<value_t> &pos_enorm_thold = 0.002,
+        const std::optional<value_t> &rot_enorm_thold = 1.0
+    ) const noexcept { 
+        return m_traj_gen.goal_reached(angles_enorm_thold, pos_enorm_thold, rot_enorm_thold); 
+    }
 
-    // 🌟 RobotModel의 메서드 호출
     std::string get_model_name() const { return m_model.get_model_name(); }
 
   protected:

@@ -125,16 +125,35 @@ class TrajGenerator {
         return true;
     }
 
+    // 1️⃣ 원래 있던 행렬용 attrl (쉼표와 주석 제거 및 원래 코드 유지)
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
-        // 🌟 현재 Generator가 들고 있는 m_tcp_offset을 생성자로 전달
+        // 🌟 (여기에 원래 있던 TrajAttrL 생성 및 할당 등 기존 로직이 있어야 합니다)
         m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
-        
-        // 이제 TrajAttrL에 해당 함수들이 있으므로 에러가 사라집/니다.
         m_gen_attrl.set_goal_pose(goal_tmat);
         m_gen_attrl.set_kp_cartesian(kp);
-        
         m_traj_state = traj_state_t::ATTRL;
         return true;
+    }
+
+    // 2️⃣ 새로 추가한 좌표용 attrl (이건 완벽합니다)
+    [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
+        tmat_t T_goal = m_tmat; 
+        
+        // 1. 위치 이동 (상대 좌표)
+        T_goal.translation().x() += dx;
+        T_goal.translation().y() += dy;
+        T_goal.translation().z() += dz;
+
+        // 🌟 2. 여기가 핵심입니다! (석션/그리퍼 수직 고정)
+        // 어떤 TCP 오프셋이 들어와 있든, 도구 끝은 무조건 바닥을 향하도록 강제합니다.
+        Eigen::Matrix3d R_align;
+        R_align << 1,  0,  0,
+                0, -1,  0,
+                0,  0, -1; 
+        T_goal.linear() = R_align;
+
+        // 3. 엔진으로 전달
+        return this->attrl(T_goal, kp); 
     }
 
     void stop() noexcept { m_traj_state = traj_state_t::STOP; }

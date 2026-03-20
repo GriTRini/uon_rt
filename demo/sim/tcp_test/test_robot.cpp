@@ -34,7 +34,7 @@ int main() {
     struct TCPConfig { std::string name; double x; double y; double z; double r; double p; double yw; };
     std::vector<TCPConfig> configs = {
         {"no_tcp",      0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-        {"current_tcp", -0.0122, -0.0122, 0.0266, 60.0, 0.0, -45.0}
+        {"current_tcp", -0.122, -0.122, 0.0266, 60.0, 0.0, -45.0}
     };
 
     double dt = 0.001;
