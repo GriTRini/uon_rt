@@ -4,6 +4,7 @@
 #include <array>
 #include <Eigen/Dense>
 #include "m1013.hpp"
+#include "hcr14.hpp"
 
 namespace rt_control {
 namespace model {
@@ -39,6 +40,14 @@ public:
             m_min_angaccs = m1013::MIN_ANGACCS; 
             m_max_angaccs = m1013::MAX_ANGACCS;
             m_joints = m1013::joints;
+        } else if (model_name == "hcr14") {
+            m_min_angles = hcr14::MIN_ANGLES; 
+            m_max_angles = hcr14::MAX_ANGLES;
+            m_min_angvels = hcr14::MIN_ANGVELS; 
+            m_max_angvels = hcr14::MAX_ANGVELS;
+            m_min_angaccs = hcr14::MIN_ANGACCS; 
+            m_max_angaccs = hcr14::MAX_ANGACCS;
+            m_joints = hcr14::joints;
         }
     }
 
