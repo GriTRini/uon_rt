@@ -34,7 +34,7 @@ template <size_t ID = 0> class Robot {
     
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-    using angles_set_t = trajectory::TrajGenerator::angles_set_t;
+    // using angles_set_t = trajectory::TrajGenerator::angles_set_t;
 
   public:
     constexpr static size_t id = ID;
@@ -48,7 +48,7 @@ template <size_t ID = 0> class Robot {
           m_is_tp_initialized(false), 
           m_has_control_right(false),
           m_is_rt_control_ready(false), 
-          m_servoj_target_time(0.001f)
+          m_servoj_target_time(0.05f)
     {
         // TrajGenerator 초기화 (Zero 상태로 시작)
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
@@ -238,8 +238,8 @@ template <size_t ID = 0> class Robot {
         const std::optional<value_t> &duration = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) return false;
-        return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()), 
-                                peak_v, peak_a, duration);
+        // 🌟 제너레이터의 trapj는 2개의 인자만 받으므로 아래처럼 수정합니다.
+        return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()));
     }
 
     /** @brief attrl (절대 좌표 Pose 이동) */
@@ -386,7 +386,7 @@ template <size_t ID = 0> class Robot {
     std::atomic<bool> m_is_rt_control_ready{};
 
     uon::timer::Timer<int64_t, std::milli> m_update_timer;
-    float m_servoj_target_time = 0.001f; 
+    float m_servoj_target_time = 0.05f; 
 };
 
 template <size_t ID> Robot<ID> *Robot<ID>::m_robot_instance = nullptr;

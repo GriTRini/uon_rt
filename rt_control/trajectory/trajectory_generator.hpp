@@ -193,6 +193,10 @@ class TrajGenerator {
     }
 
     // --- Getters ---
+    [[nodiscard]] const angles_t& angvels() const noexcept { return m_angvels; }
+    [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
+    [[nodiscard]] const jmat_t& jmat() const noexcept { return m_jmat; }
+    [[nodiscard]] const a_t& a() const noexcept { return m_a; }
     [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
     [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
     [[nodiscard]] constexpr bool goal_reached(
