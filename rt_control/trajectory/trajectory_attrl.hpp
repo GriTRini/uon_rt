@@ -9,8 +9,7 @@ namespace trajectory {
 
 /**
  * @brief TrajAttrL 클래스
- * Cartesian Space(작업 공간)에서 목표 Pose를 추종하는 궤적 생성기입니다.
- * 내부적으로 IK Solver를 호출하여 조인트 목표값을 갱신합니다.
+ * Cartesian Space(작업 공간)에서 목표 Pose를 추종하며 실시간으로 조인트를 업데이트합니다.
  */
 class TrajAttrL : public TrajAttrJ {
   public:
@@ -21,11 +20,8 @@ class TrajAttrL : public TrajAttrJ {
     using a_t = Eigen::Matrix<value_t, 6, 1>;
 
   public:
-    TrajAttrL() = default;
+    TrajAttrL() : m_kp(40.0) {}
 
-    /**
-     * @brief TrajGenerator에서 호출하는 DSR 스타일 생성자
-     */
     TrajAttrL(const model::RobotModel* model, 
               const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const tmat_t& tcp_offset) noexcept
@@ -33,74 +29,71 @@ class TrajAttrL : public TrajAttrJ {
                model->get_min_angles(), model->get_max_angles(),
                model->get_min_angvels(), model->get_max_angvels(),
                model->get_min_angaccs(), model->get_max_angaccs()),
-          m_model(model), m_tcp_offset(tcp_offset) 
+          m_model(model), m_tcp_offset(tcp_offset), m_kp(40.0) 
     {
-        // 초기 TCP 포즈 계산 및 저장
         auto [initial_pose, J] = ik::compute_forward_and_jacobian(m_model, q, m_tcp_offset);
-        m_tmat = initial_pose;
         m_goal_tmat = initial_pose;
-        m_goal_a.setZero();
     }
 
-    /**
-     * @brief 매 제어 주기마다 호출되는 업데이트 루프
-     */
     [[nodiscard]] bool update(const value_t &dt) noexcept override {
         if (dt <= 0.0) return false;
 
-        // 🌟 제공해주신 IKSolver::solve 인터페이스 호출
-        auto [target_q, converged] = ik::IKSolver::solve(
-            m_model, 
-            m_goal_tmat, 
-            Base::angles(), 
-            m_tcp_offset, 
-            100,    // step_max
-            1e-4,   // enorm_threshold
-            0.01    // damping
-        );
+        // 1. 현재 TCP 포즈 및 Jacobian 획득
+        auto [curr_pose, J_curr] = ik::compute_forward_and_jacobian(m_model, Base::angles(), m_tcp_offset);
         
-        if (!converged) {
-            // 수렴 실패 시 멈추거나 이전 상태 유지 (디버깅을 위해 로그 출력 추천)
-            return false; 
+        // 2. 위치 에러 (Position Error)
+        Eigen::Vector3d p_err = m_goal_tmat.translation() - curr_pose.translation();
+        
+        // 3. 🌟 회전 에러 (Orientation Error) - 개선된 방식
+        // R_err = R_goal * R_curr^T (현재 자세에서 목표 자세로 가기 위한 회전 행렬)
+        Eigen::Matrix3d R_err = m_goal_tmat.linear() * curr_pose.linear().transpose();
+        
+        // 회전 행렬을 Angle-Axis로 변환
+        Eigen::AngleAxisd aa_err(R_err);
+        
+        // 🌟 수치적 안정성 처리 (오차가 거의 없을 때 axis가 튀는 현상 방지)
+        Eigen::Vector3d w_err;
+        if (aa_err.angle() < 1e-6) {
+            w_err.setZero();
+        } else {
+            // aa_err.angle()은 항상 양수이므로 axis가 방향을 결정함
+            w_err = aa_err.axis() * aa_err.angle();
         }
 
-        Base::set_goal_angles(target_q);
-        if (!Base::update(dt)) return false;
+        // 4. Task Velocity Command (v = Kp * error)
+        Eigen::Matrix<double, 6, 1> x_dot;
+        x_dot.segment<3>(0) = p_err * m_kp;
+        x_dot.segment<3>(3) = w_err * m_kp;
 
-        // 현재 상태 갱신
-        auto [cp, J] = ik::compute_forward_and_jacobian(m_model, Base::angles(), m_tcp_offset);
-        m_tmat = cp;
+        // 5. Jacobian Damped Least Squares (DLS)
+        // 회전이 잘 안 먹는다면 lambda를 살짝 줄여보거나(0.005), 
+        // Jacobian의 하부(Rotation 부분) 가중치를 확인해야 합니다.
+        double lambda = 0.005; // Damping factor
+        Eigen::Matrix<double, 6, 6> JJT = J_curr * J_curr.transpose();
+        JJT += (lambda * lambda) * Eigen::Matrix<double, 6, 6>::Identity();
+        
+        // dq(rad) 계산
+        Eigen::Matrix<double, 6, 1> dq_rad = J_curr.transpose() * JJT.ldlt().solve(x_dot);
 
-        return true;
+        // 6. 다음 조인트 각도 계산 및 업데이트 (Deg 변환)
+        angles_t next_q = Base::angles() + (dq_rad * (180.0 / M_PI) * dt);
+        
+        Base::set_goal_angles(next_q);
+        return Base::update(dt);
     }
 
-    // --- DSR 호환 Setters & Getters ---
-    
-    /** @brief 목표 포즈 설정 (TrajGenerator::attrl에서 호출) */
-    void set_tmat_goal(const tmat_t& goal) noexcept { m_goal_tmat = goal; }
-    void set_goal_pose(const tmat_t& goal) noexcept { m_goal_tmat = goal; } // Alias
+    // --- Setters ---
+    void set_goal_pose(const tmat_t& goal) noexcept { m_goal_tmat = goal; }
+    void set_kp(value_t kp) noexcept { m_kp = kp; }
 
-    /** @brief 목표 작업공간 속도 설정 */
-    void set_a_goal(const a_t& goal_a) noexcept { m_goal_a = goal_a; }
-
-    /** @brief 카테시안 게인 설정 */
-    void set_kp_cartesian(value_t kp) noexcept { 
-        // 조인트 엔진의 게인을 조정하여 추종 강도를 제어
-        Base::set_kp(kp); 
-    }
-    void set_kp(value_t kp) noexcept { Base::set_kp(kp); } // Alias
-
-    [[nodiscard]] const tmat_t& goal_tmat() const noexcept { return m_goal_tmat; }
+    // --- Getters ---
     [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_goal_tmat; }
-    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
-    [[nodiscard]] const a_t& goal_a() const noexcept { return m_goal_a; }
 
   protected:
     const model::RobotModel* m_model = nullptr;
-    tmat_t m_tmat;         // 현재 TCP Pose
-    tmat_t m_goal_tmat;    // 목표 TCP Pose
-    tmat_t m_tcp_offset;   // Tool Offset
-    a_t m_goal_a;          // 목표 작업공간 가속도/속도(DSR 확장용)
+    tmat_t m_goal_tmat;
+    tmat_t m_tcp_offset;
+    value_t m_kp; // Cartesian Gain
 };
 
 } // namespace trajectory

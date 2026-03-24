@@ -30,25 +30,21 @@ enum class TrajState {
 
 class TrajGenerator {
   public:
-    // DSR 스타일의 타입 Alias 유지
     using traj_state_t = TrajState;
     using value_t = rt_control::value_t;
     using angles_t = rt_control::angles_t;
-    using pos_t = Eigen::Vector3d;
-    using w_t = Eigen::Vector3d;
-    using rmat_t = Eigen::Matrix3d;
     using tmat_t = Eigen::Isometry3d;
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-    using angles_set_t = std::vector<angles_t>;
 
   public:
-    // 생성자: DSR의 초기화 로직 유지
     TrajGenerator() {
         m_tcp_offset = tmat_t::Identity();
         m_traj_state = traj_state_t::STOP;
+        m_angles.setZero();
+        m_angvels.setZero();
+        m_angaccs.setZero();
         m_a.setZero();
-        m_a_d1.setZero();
     }
 
     void initialize(const rt_control::model::RobotModel& robot_model,
@@ -60,221 +56,261 @@ class TrajGenerator {
         m_angvels = start_angvels;
         m_angaccs = start_angaccs;
 
-        update_clip();
         update_subordinates();
-        stop(); // 초기 상태는 STOPPING/STOP
+        m_traj_state = traj_state_t::STOP;
     }
 
-    // --- Update Loop ---
     void update(const value_t &dt) noexcept {
         switch (m_traj_state) {
-        case traj_state_t::STOP:
-            m_angvels.setZero();
-            m_angaccs.setZero();
-            break;
-        case traj_state_t::STOPPING: update_stopping(dt); break;
-        case traj_state_t::TRAPJ:    update_trapj(dt);    break;
-        case traj_state_t::ATTRJ:    update_attrj(dt);    break;
-        case traj_state_t::ATTRL:    update_attrl(dt);    break;
-        case traj_state_t::PLAYJ:    update_playj(dt);    break;
+            case traj_state_t::STOP:
+                m_angvels.setZero();
+                m_angaccs.setZero();
+                break;
+            case traj_state_t::STOPPING: update_stopping(dt); break;
+            case traj_state_t::TRAPJ:    update_trapj(dt);    break;
+            case traj_state_t::ATTRJ:    update_attrj(dt);    break; // 🌟 함수 확인
+            case traj_state_t::ATTRL:    update_attrl(dt);    break;
+            case traj_state_t::PLAYJ:    update_playj(dt);    break; // 🌟 함수 확인
         }
         update_clip();
         update_subordinates();
     }
 
     // --- TCP Management ---
+    void set_tcp_tmat(const tmat_t &new_shift_tmat) noexcept { m_tcp_offset = new_shift_tmat; }
     void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
-        m_tcp_offset = tmat_t::Identity();
-        m_tcp_offset.translation() << x, y, z;
-        const value_t d2r = M_PI / 180.0;
-        m_tcp_offset.linear() = (Eigen::AngleAxisd(yaw_deg * d2r, Eigen::Vector3d::UnitZ()) *
-                                Eigen::AngleAxisd(p_deg * d2r, Eigen::Vector3d::UnitY()) *
-                                Eigen::AngleAxisd(r_deg * d2r, Eigen::Vector3d::UnitX())).toRotationMatrix();
-        update_subordinates();
-    }
-
-    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept {
-        return m_tcp_offset;
+        double d2r = M_PI / 180.0;
+        tmat_t T = tmat_t::Identity();
+        T.translation() << x, y, z;
+        T.linear() = (Eigen::AngleAxisd(yaw_deg * d2r, Eigen::Vector3d::UnitZ()) *
+                      Eigen::AngleAxisd(p_deg * d2r, Eigen::Vector3d::UnitY()) *
+                      Eigen::AngleAxisd(r_deg * d2r, Eigen::Vector3d::UnitX())).toRotationMatrix();
+        set_tcp_tmat(T);
     }
 
     // --- Trajectory Commands ---
     void stop() noexcept {
-        m_gen_stop = TrajStop(angles(), angvels(), angaccs());
+        m_gen_stop = TrajStop(m_angles, m_angvels, m_angaccs);
         m_traj_state = traj_state_t::STOPPING;
     }
-
-    [[nodiscard]] bool trapj(const angles_t &goal_angles,
-                             const angles_t &goal_angvels = angles_t::Zero(),
-                             const std::optional<angles_t> &peak_angvels = std::nullopt,
-                             const std::optional<angles_t> &peak_angaccs = std::nullopt,
-                             const std::optional<value_t> &duration = std::nullopt) noexcept {
-        m_gen_trapj = TrajTrapJ(&m_model, angles(), angvels(), goal_angles, goal_angvels,
-                                peak_angvels.value_or(m_model.get_max_angvels()),
-                                peak_angaccs.value_or(m_model.get_max_angaccs()), duration);
-        m_traj_state = traj_state_t::TRAPJ;
-        return true;
+    // 1. 관절 각도 오차 (L2 Norm, deg)
+    [[nodiscard]] std::optional<value_t> angles_enorm() const noexcept {
+        auto gq = goal_angles();
+        if (!gq.has_value()) return std::nullopt;
+        return (gq.value() - m_angles).norm();
     }
 
-    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &kp = 50,
-                             const a_t &goal_a = a_t::Zero(),
-                             const value_t &peak_endvel = 0.5, const value_t &peak_endangvel = 180) noexcept {
-        m_gen_attrl = TrajAttrL(&m_model, angles(), angvels(), angaccs(), m_tcp_offset);
-        m_gen_attrl.set_goal_pose(goal_tmat);
-        m_gen_attrl.set_kp_cartesian(kp);
-        // 필요 시 peak_endvel 등 설정 로직 추가
-        m_traj_state = traj_state_t::ATTRL;
-        return true;
+    // 2. 위치 오차 (L2 Norm, m)
+    [[nodiscard]] std::optional<value_t> pos_enorm() const noexcept {
+        auto gt = goal_tmat();
+        if (!gt.has_value()) return std::nullopt;
+        return (gt.value().translation() - m_tmat.translation()).norm();
     }
 
-    // --- DSR 스타일 Kinematics Solvers ---
-    [[nodiscard]] tmat_t solve_forward(const angles_t &angles) const noexcept {
-        // forward_kinematics.hpp에 정의된 함수 호출
-        auto [pose, J] = ik::compute_forward_and_jacobian(&m_model, angles, m_tcp_offset);
-        return pose;
+    // 3. 회전 오차 (Angle 차이, deg)
+    [[nodiscard]] std::optional<value_t> rot_enorm() const noexcept {
+        auto gt = goal_tmat();
+        if (!gt.has_value()) return std::nullopt;
+        // R_err = R_target * R_curr^T
+        Eigen::AngleAxisd err_aa(gt.value().linear() * m_tmat.linear().transpose());
+        return std::abs(err_aa.angle()) * (180.0 / M_PI);
     }
 
-    [[nodiscard]] auto solve_inverse(const angles_t &initial_angles, const tmat_t &target_tmat) const noexcept {
-        // ik_solver.hpp의 IKSolver 클래스 사용
-        return ik::IKSolver::solve(&m_model, target_tmat, initial_angles, m_tcp_offset, 100, 1e-4, 0.01);
+    // 4. 관절 속도 오차 (deg/s)
+    [[nodiscard]] std::optional<value_t> angvels_enorm() const noexcept {
+        return m_angvels.norm(); // 정지 목표이므로 현재 속도 자체가 오차
     }
 
-    // --- Status & Getters ---
-    [[nodiscard]] const traj_state_t& traj_state() const noexcept { return m_traj_state; }
-    [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
-    [[nodiscard]] const angles_t& angvels() const noexcept { return m_angvels; }
-    [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
-    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
-    [[nodiscard]] const jmat_t& jmat() const noexcept { return m_jmat; }
-    [[nodiscard]] const a_t& a() const noexcept { return m_a; }
+    // 5. 작업 공간 선속도 오차 (m/s)
+    [[nodiscard]] std::optional<value_t> vel_enorm() const noexcept {
+        return m_a.segment<3>(0).norm();
+    }
 
-    // --- DSR의 세밀한 Error & Threshold 로직 ---
+    // 6. 작업 공간 각속도 오차 (deg/s)
+    [[nodiscard]] std::optional<value_t> w_enorm() const noexcept {
+        return m_a.segment<3>(3).norm();
+    }
+
     [[nodiscard]] std::optional<angles_t> goal_angles() const noexcept {
-        if (m_traj_state == traj_state_t::STOP) return angles();
+        if (m_traj_state == traj_state_t::STOP) return m_angles;
         if (m_traj_state == traj_state_t::STOPPING) return m_gen_stop.goal_angles();
         if (m_traj_state == traj_state_t::TRAPJ) return m_gen_trapj.goal_angles();
+        // ATTRL 상태에서는 실시간으로 목표 각도가 변하므로 특정 목표 각도가 고정되어 있지 않음
         return std::nullopt;
     }
 
+    /**
+     * @brief 현재 진행 중인 궤적의 최종 목표 포즈(Tmat)를 반환
+     */
     [[nodiscard]] std::optional<tmat_t> goal_tmat() const noexcept {
-        if (m_traj_state == traj_state_t::ATTRL) return m_gen_attrl.goal_pose();
-        auto gangles = goal_angles();
-        if (gangles) return solve_forward(*gangles);
-        return std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<value_t> angles_enorm() const noexcept {
-        auto gang = goal_angles();
-        if (gang) return (*gang - m_angles).norm();
-        return std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<value_t> pos_enorm() const noexcept {
-        auto gtmat = goal_tmat();
-        if (gtmat) return (gtmat->translation() - m_tmat.translation()).norm();
-        return std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<value_t> rot_enorm() const noexcept {
-        auto gtmat = goal_tmat();
-        if (gtmat) {
-            Eigen::AngleAxisd err_aa(gtmat->linear() * m_tmat.linear().transpose());
-            return std::abs(err_aa.angle()) * (180.0 / M_PI);
+        if (m_traj_state == traj_state_t::ATTRL) {
+            return m_gen_attrl.goal_pose();
+        }
+        // Joint 기반 제어 중일 때는 목표 각도를 Forward Kinematics로 변환해서 반환
+        auto gq = goal_angles();
+        if (gq.has_value()) {
+            return solve_forward(gq.value());
         }
         return std::nullopt;
     }
 
-    // DSR의 통합 goal_reached 판정 로직
-    [[nodiscard]] bool goal_reached(
+    [[nodiscard]] bool trapj(const angles_t &goal_angles, const angles_t &goal_angvels = angles_t::Zero()) noexcept {
+        m_gen_trapj = TrajTrapJ(&m_model, m_angles, m_angvels, goal_angles, goal_angvels,
+                                m_model.get_max_angvels(), m_model.get_max_angaccs());
+        m_traj_state = traj_state_t::TRAPJ;
+        return true;
+    }
+
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &kp = 50.0) noexcept {
+        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
+        m_gen_attrl.set_goal_pose(goal_tmat);
+        m_gen_attrl.set_kp(kp);
+        m_traj_state = traj_state_t::ATTRL;
+        return true;
+    }
+
+    [[nodiscard]] bool align_tcp_to_floor(const value_t &kp = 100.0) noexcept {
+        tmat_t target = m_tmat; // 현재 위치(translation)는 그대로 유지
+        target.linear() << 1,  0,  0,
+                           0, -1,  0,
+                           0,  0, -1; // 월드 좌표계 기준 바닥 방향
+        return attrl(target, kp);     // 내부적으로 attrl을 재활용하여 구동
+    }
+
+    // 🌟 추가 2 (보너스): 정면(X) 방향으로 TCP 정렬 (벽면 작업용)
+    [[nodiscard]] bool align_tcp_to_front(const value_t &kp = 100.0) noexcept {
+        tmat_t target = m_tmat;
+        target.linear() << 0,  0,  1,
+                           0,  1,  0,
+                          -1,  0,  0; // 월드 좌표계 기준 정면(X축) 방향
+        return attrl(target, kp);
+    }
+
+    // --- Kinematics Solvers ---
+    [[nodiscard]] tmat_t solve_forward(const angles_t &q) const noexcept {
+        auto [pose, J] = ik::compute_forward_and_jacobian(&m_model, q, m_tcp_offset);
+        return pose;
+    }
+
+    // --- Getters ---
+    [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
+    [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
+    [[nodiscard]] constexpr bool goal_reached(
         const std::optional<value_t> &angles_enorm_thold = 2.0,
         const std::optional<value_t> &pos_enorm_thold = 0.002,
         const std::optional<value_t> &rot_enorm_thold = 3.0,
         const std::optional<value_t> &angvels_enorm_thold = 4.0,
         const std::optional<value_t> &vel_enorm_thold = 0.004,
-        const std::optional<value_t> &w_enorm_thold = 6.0
-    ) const noexcept {
+        const std::optional<value_t> &w_enorm_thold = 6.0) const noexcept 
+    {
+        // 이미 정지 상태인 경우 즉시 true 반환
         if (m_traj_state == traj_state_t::STOP) return true;
 
-        if (angles_enorm_thold) {
-            auto err = angles_enorm();
-            if (err && *err > *angles_enorm_thold) return false;
+        auto reached = false;
+
+        // 1. Joint Angle Error Check
+        if (angles_enorm_thold.has_value()) {
+            const auto trg = this->angles_enorm(); // 멤버 함수 호출
+            if (trg.has_value() && trg.value() > angles_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
         }
-        if (pos_enorm_thold) {
-            auto err = pos_enorm();
-            if (err && *err > *pos_enorm_thold) return false;
+
+        // 2. Position Error Check (m)
+        if (pos_enorm_thold.has_value()) {
+            const auto trg = this->pos_enorm();
+            if (trg.has_value() && trg.value() > pos_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
         }
-        if (rot_enorm_thold) {
-            auto err = rot_enorm();
-            if (err && *err > *rot_enorm_thold) return false;
+
+        // 3. Rotation Error Check (deg)
+        if (rot_enorm_thold.has_value()) {
+            const auto trg = this->rot_enorm();
+            if (trg.has_value() && trg.value() > rot_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
         }
-        // 속도 및 가속도 기반 체크 추가 가능 (m_angvels.norm() 등)
-        return true;
+
+        // 4. Joint Velocity Error Check
+        if (angvels_enorm_thold.has_value()) {
+            const auto trg = this->angvels_enorm();
+            if (trg.has_value() && trg.value() > angvels_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
+        }
+
+        // 5. Cartesian Velocity Error Check
+        if (vel_enorm_thold.has_value()) {
+            const auto trg = this->vel_enorm();
+            if (trg.has_value() && trg.value() > vel_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
+        }
+
+        // 6. Angular Velocity Error Check
+        if (w_enorm_thold.has_value()) {
+            const auto trg = this->w_enorm();
+            if (trg.has_value() && trg.value() > w_enorm_thold.value()) {
+                return false;
+            }
+            reached = true;
+        }
+
+        return reached;
     }
+    
 
   protected:
-    // 각 엔진 업데이트 시 상태 복사 로직 (DSR 스타일)
+    // 🌟 에러 해결: 모든 하위 업데이트 함수 정의
     void update_stopping(const value_t &dt) noexcept {
         m_gen_stop.update(dt);
         copy_state(m_gen_stop);
         if (m_gen_stop.goal_reached()) m_traj_state = traj_state_t::STOP;
     }
-
     void update_trapj(const value_t &dt) noexcept {
         m_gen_trapj.update(dt);
         copy_state(m_gen_trapj);
         if (m_gen_trapj.goal_reached()) m_traj_state = traj_state_t::STOP;
     }
-
     void update_attrj(const value_t &dt) noexcept {
         m_gen_attrj.update(dt);
         copy_state(m_gen_attrj);
     }
-
     void update_attrl(const value_t &dt) noexcept {
         if (!m_gen_attrl.update(dt)) stop();
         else copy_state(m_gen_attrl);
     }
-
     void update_playj(const value_t &dt) noexcept {
-        m_gen_playj.update(dt); // bool 체크 제거
+        m_gen_playj.update(dt);
         copy_state(m_gen_playj);
-        // if (m_gen_playj.is_finished()) stop(); // 필요시 완료 체크 추가
     }
 
-    template<typename T>
-    void copy_state(const T& gen) {
-        m_angles = gen.angles();
-        m_angvels = gen.angvels();
-        m_angaccs = gen.angaccs();
+    template<typename T> void copy_state(const T& gen) {
+        m_angles = gen.angles(); m_angvels = gen.angvels(); m_angaccs = gen.angaccs();
     }
-
     void update_clip() noexcept {
         m_angles = m_angles.cwiseMax(m_model.get_min_angles()).cwiseMin(m_model.get_max_angles());
     }
-
     void update_subordinates() noexcept {
         auto [pose, J] = ik::compute_forward_and_jacobian(&m_model, m_angles, m_tcp_offset);
-        m_tmat = pose;
-        m_jmat = J;
-        double d2r = M_PI / 180.0;
-        m_a = m_jmat * (m_angvels * d2r);
+        m_tmat = pose; m_jmat = J;
+        m_a = m_jmat * (m_angvels * (M_PI / 180.0));
     }
 
   protected:
     rt_control::model::RobotModel m_model;
     traj_state_t m_traj_state;
-    
-    TrajStop m_gen_stop; 
-    TrajTrapJ m_gen_trapj; 
-    TrajAttrJ m_gen_attrj;
-    TrajAttrL m_gen_attrl; 
-    TrajPlayJ m_gen_playj;
-
+    TrajStop m_gen_stop; TrajTrapJ m_gen_trapj; TrajAttrJ m_gen_attrj;
+    TrajAttrL m_gen_attrl; TrajPlayJ m_gen_playj;
     angles_t m_angles, m_angvels, m_angaccs;
-    tmat_t m_tmat;
-    tmat_t m_tcp_offset; 
-    jmat_t m_jmat;
-    a_t m_a;
-    a_t m_a_d1;
+    tmat_t m_tmat, m_tcp_offset;
+    jmat_t m_jmat; a_t m_a;
 };
 
 } // namespace trajectory

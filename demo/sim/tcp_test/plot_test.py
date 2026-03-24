@@ -110,4 +110,4 @@ def animate_multi_robust(file_path):
 
 if __name__ == "__main__":
     # 파일명이 맞는지 확인하세요
-    animate_multi_robust('tcp_multi_test_data.csv')
+    animate_multi_robust('tcp_square_sim_data.csv')

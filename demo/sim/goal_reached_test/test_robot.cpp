@@ -96,7 +96,7 @@ int main() {
 
     // [Step 3] 다시 원래 위치로 복귀
     std::cout << "\n🔄 [복귀 테스트]" << std::endl;
-    (void)traj_gen.attrl(T_home, 40.0); 
+    (void)traj_gen.attrl(T_home, 200.0); 
     run_sim(3, "Return_to_Home");
 
     csv.close();

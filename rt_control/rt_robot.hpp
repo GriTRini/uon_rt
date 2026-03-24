@@ -32,7 +32,6 @@ template <size_t ID = 0> class Robot {
     using value_t = rt_control::value_t;
     using tmat_t = Eigen::Isometry3d;
     
-    // 🌟 DSR/Eigen 연동을 위한 추가 타입 정의 (Jacobian, Task Vel 등)
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
     using angles_set_t = trajectory::TrajGenerator::angles_set_t;
@@ -49,7 +48,7 @@ template <size_t ID = 0> class Robot {
           m_is_tp_initialized(false), 
           m_has_control_right(false),
           m_is_rt_control_ready(false), 
-          m_servoj_target_time(0.001f) // 기본 제어 주기 1ms 권장
+          m_servoj_target_time(0.001f)
     {
         // TrajGenerator 초기화 (Zero 상태로 시작)
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
@@ -62,9 +61,10 @@ template <size_t ID = 0> class Robot {
     }
 
   public:
-    /**
-     * @brief TCP/IP 연결 및 제어권 획득
-     */
+    // ==============================================================
+    // 🔌 Connection & Control Setup
+    // ==============================================================
+
     [[nodiscard]] OpenConnError open_connection(
         const std::string &strIpAddr = "192.168.1.30",
         const uint32_t usPort = 12345,
@@ -109,9 +109,6 @@ template <size_t ID = 0> class Robot {
         return OpenConnError::NO_ERROR;
     }
 
-    /**
-     * @brief 실시간(RT) 제어를 위한 UDP 연결
-     */
     [[nodiscard]] bool connect_rt(
         const std::string &strIpAddr = "192.168.1.30",
         const uint32_t usPort = 12347) 
@@ -142,9 +139,6 @@ template <size_t ID = 0> class Robot {
         return true;
     }
 
-    /**
-     * @brief 로봇 모터를 켜고 실시간 업데이트 타이머 시작
-     */
     [[nodiscard]] ServoOnError servo_on(
         const std::chrono::milliseconds timeout = std::chrono::milliseconds(3000)) 
     {
@@ -202,9 +196,9 @@ template <size_t ID = 0> class Robot {
         return CloseConnError::NO_ERROR;
     }
 
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
     // 🌟 [핵심] 실시간 기구학 및 TCP 정보 인터페이스
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
 
     /** @brief TCP 오프셋 설정 (XYZ-RPY Degree) */
     void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
@@ -212,33 +206,27 @@ template <size_t ID = 0> class Robot {
     }
 
     /** @brief 현재 도구 끝단(TCP)의 전역 포즈 반환 */
-    [[nodiscard]] const tmat_t& get_task_pos() const noexcept { 
-        return m_traj_gen.tmat(); 
-    }
+    [[nodiscard]] const tmat_t& get_task_pos() const noexcept { return m_traj_gen.tmat(); }
 
     /** @brief 현재 Jacobian 행렬 반환 */
-    [[nodiscard]] const jmat_t& get_jacobian() const noexcept { 
-        return m_traj_gen.jmat(); 
-    }
+    [[nodiscard]] const jmat_t& get_jacobian() const noexcept { return m_traj_gen.jmat(); }
 
     /** @brief 현재 작업 공간(Task) 속도 (v, w) 반환 */
-    [[nodiscard]] const a_t& get_task_vel() const noexcept { 
-        return m_traj_gen.a(); 
-    }
+    [[nodiscard]] const a_t& get_task_vel() const noexcept { return m_traj_gen.a(); }
 
     /** @brief 순기구학 계산 (TCP 반영) */
     [[nodiscard]] tmat_t solve_forward(const angles_t& q) const noexcept {
         return m_traj_gen.solve_forward(q);
     }
 
-    /** @brief 역기구학 계산 (현재 위치 기준) */
-    [[nodiscard]] auto solve_inverse(const tmat_t& target_tmat) const noexcept {
-        return m_traj_gen.solve_inverse(m_traj_gen.angles(), target_tmat);
-    }
+    /** @brief 역기구학 계산 (현재 위치 기준) - 구현되어 있다면 활성화 */
+    // [[nodiscard]] auto solve_inverse(const tmat_t& target_tmat) const noexcept {
+    //     return m_traj_gen.solve_inverse(m_traj_gen.angles(), target_tmat);
+    // }
 
-    //////////////////////////////////////////////////////////////
-    // 🌟 [핵심] Motion Commands (DSR 이식)
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
+    // 🌟 [핵심] Motion Commands
+    // ==============================================================
 
     void stop() noexcept { m_traj_gen.stop(); }
 
@@ -260,11 +248,11 @@ template <size_t ID = 0> class Robot {
         return m_traj_gen.attrl(goal_tmat, kp);
     }
 
-    /** @brief attrl (상대 좌표 하강 및 수직 정렬) */
-    [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
-        if (!m_update_timer.is_running()) return false;
-        return m_traj_gen.attrl(dx, dy, dz, kp);
-    }
+    /** @brief attrl (상대 좌표 하강 및 수직 정렬 - 오버로딩 구현 시 사용) */
+    // [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
+    //     if (!m_update_timer.is_running()) return false;
+    //     return m_traj_gen.attrl(dx, dy, dz, kp);
+    // }
 
     /** @brief movel (절대 좌표 XYZ 기반 이동) */
     [[nodiscard]] bool movel(double x, double y, double z, value_t kp = 50.0) noexcept {
@@ -274,17 +262,39 @@ template <size_t ID = 0> class Robot {
         return m_traj_gen.attrl(target, kp);
     }
 
-    [[nodiscard]] bool get_goal_reached(
-        const std::optional<value_t> &q_th = 0.1,
-        const std::optional<value_t> &p_th = 0.002,
-        const std::optional<value_t> &r_th = 1.0
-    ) const noexcept { 
-        return m_traj_gen.goal_reached(q_th, p_th, r_th); 
+    // -----------------------------------------------------------
+    // 🌟 추가된 TCP 정렬 유틸리티 함수 (Generator 연동)
+    // -----------------------------------------------------------
+    /**
+     * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 바닥(-Z)을 수직으로 바라보도록 자세를 정렬합니다.
+     */
+    [[nodiscard]] bool align_tcp_to_floor(value_t kp = 100.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        return m_traj_gen.align_tcp_to_floor(kp);
     }
 
-    //////////////////////////////////////////////////////////////
+    /**
+     * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 정면(X)을 수평으로 바라보도록 자세를 정렬합니다.
+     */
+    [[nodiscard]] bool align_tcp_to_front(value_t kp = 100.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        return m_traj_gen.align_tcp_to_front(kp);
+    }
+    // -----------------------------------------------------------
+
+    /** @brief 목표 도달 여부 확인 */
+    [[nodiscard]] bool get_goal_reached(
+        const std::optional<value_t> &q_th = std::nullopt, // 값을 안 주면 Generator 기본값(2.0) 사용
+        const std::optional<value_t> &p_th = std::nullopt, // 값을 안 주면 Generator 기본값(0.002) 사용
+        const std::optional<value_t> &r_th = std::nullopt  // 값을 안 주면 Generator 기본값(3.0) 사용
+    ) const noexcept { 
+        // 입력받은 값을 그대로 넘깁니다. 속도 3개는 항상 nullopt로 검사 생략.
+        return m_traj_gen.goal_reached(q_th, p_th, r_th, std::nullopt, std::nullopt, std::nullopt); 
+    }
+    
+    // ==============================================================
     // 🌟 실시간 업데이트 루프 (Internal Timer)
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
 
   protected:
     void update() {
@@ -293,7 +303,7 @@ template <size_t ID = 0> class Robot {
         const double dt = std::chrono::duration_cast<std::chrono::milliseconds>(
                               m_update_timer.interval).count() / 1000.0;
 
-        // 🌟 TrajGenerator 업데이트 (여기서 모든 기구학, Jacobian, 궤적 계산이 수행됨)
+        // 🌟 TrajGenerator 업데이트 (기구학, Jacobian, 궤적 계산 수행)
         m_traj_gen.update(dt);
 
         float q[6], q_d1[6], q_d2[6];
@@ -311,9 +321,9 @@ template <size_t ID = 0> class Robot {
         draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, m_servoj_target_time);
     }
 
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
     // 🌟 데이터 수신 및 유틸리티
-    //////////////////////////////////////////////////////////////
+    // ==============================================================
 
   public:
     [[nodiscard]] std::optional<angles_t> get_current_angles() const noexcept {
