@@ -1,0 +1,21 @@
+# Data Files
+*.csv
+*.log
+*.dat
+
+# Compiled Binaries
+test_robot
+test_sequence
+generate_rect_data
+main_square
+test_sequence_tmat
+
+# Build and IDE
+build/
+bin/
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+.venv/
