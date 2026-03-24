@@ -32,9 +32,9 @@ template <size_t ID = 0> class Robot {
     using value_t = rt_control::value_t;
     using tmat_t = Eigen::Isometry3d;
     
-    using jmat_t = model::RobotModel::jacobian_t;
+    // 🌟 DSR/Eigen 연동을 위한 추가 타입 정의 (Jacobian, Task Vel 등)
+    using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-    
     using angles_set_t = trajectory::TrajGenerator::angles_set_t;
 
   public:
@@ -51,10 +51,7 @@ template <size_t ID = 0> class Robot {
           m_is_rt_control_ready(false), 
           m_servoj_target_time(0.001f) // 기본 제어 주기 1ms 권장
     {
-        if (m_model.get_model_name() != "m1013") {
-            std::cerr << "[RT_CONTROL] Warning: 현재 두산 API는 'm1013' 모델만 지원합니다." << std::endl;
-        }
-        
+        // TrajGenerator 초기화 (Zero 상태로 시작)
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
         m_robot_instance = this;
     }
@@ -65,16 +62,15 @@ template <size_t ID = 0> class Robot {
     }
 
   public:
+    /**
+     * @brief TCP/IP 연결 및 제어권 획득
+     */
     [[nodiscard]] OpenConnError open_connection(
         const std::string &strIpAddr = "192.168.1.30",
         const uint32_t usPort = 12345,
         const std::chrono::milliseconds timeout_init_tp = std::chrono::milliseconds(100),
         const std::chrono::milliseconds timeout_get_ctrl = std::chrono::milliseconds(500)) 
     {
-        if (m_model.get_model_name() != "m1013") {
-            return OpenConnError::CREATE_ROBOT_CONTROL_ERROR;
-        }
-
         std::lock_guard<std::mutex> lock(m_control_mutex);
         
         if (m_control) { 
@@ -88,45 +84,38 @@ template <size_t ID = 0> class Robot {
         m_is_tp_initialized.store(false);
         m_has_control_right.store(false);
 
-        draf::_set_on_monitoring_speed_mode(m_control, TOnMonitoringSpeedModeCB);
+        // 콜백 등록
         draf::_set_on_monitoring_access_control(m_control, TOnMonitoringAccessControlCB);
-        draf::_set_on_log_alarm(m_control, TOnLogAlarmCB);
         draf::_set_on_tp_initializing_completed(m_control, TOnTpInitializingCompletedCB);
         draf::_set_on_disconnected(m_control, TOnDisconnectedCB);
 
         if (!draf::_open_connection(m_control, strIpAddr.c_str(), usPort)) {
             close_and_destroy_ctrl(m_control);
-            m_control = nullptr;
             return OpenConnError::OPEN_CONNECTION_ERROR;
         }
 
         if (!wait_for([this]() { return m_is_tp_initialized.load(); }, timeout_init_tp)) {
-            close_and_destroy_ctrl(m_control);
-            m_control = nullptr;
             return OpenConnError::INITIALIZE_TP_ERROR;
         }
 
         if (!draf::_manage_access_control(m_control, MANAGE_ACCESS_CONTROL_FORCE_REQUEST)) {
-            close_and_destroy_ctrl(m_control);
-            m_control = nullptr;
             return OpenConnError::MANAGE_ACCESS_CONTROL_ERROR;
         }
 
         if (!wait_for([this]() { return m_has_control_right.load(); }, timeout_get_ctrl)) {
-            close_and_destroy_ctrl(m_control);
-            m_control = nullptr;
             return OpenConnError::GET_CONTROL_RIGHT_ERROR;
         }
 
         return OpenConnError::NO_ERROR;
     }
 
+    /**
+     * @brief 실시간(RT) 제어를 위한 UDP 연결
+     */
     [[nodiscard]] bool connect_rt(
         const std::string &strIpAddr = "192.168.1.30",
         const uint32_t usPort = 12347) 
     {
-        if (m_model.get_model_name() != "m1013") { return false; }
-
         std::lock_guard<std::mutex> lock(m_control_rt_mutex);
         if (m_control_rt) { 
             close_and_destroy_ctrl_udp(m_control_rt); 
@@ -137,20 +126,15 @@ template <size_t ID = 0> class Robot {
         if (!m_control_rt) { return false; }
 
         if (!draf::_connect_rt_control(m_control_rt, strIpAddr.c_str(), usPort)) {
-            close_and_destroy_ctrl_udp(m_control_rt);
-            m_control_rt = nullptr;
             return false;
         }
 
+        // 출력 데이터 설정 (1ms 주기)
         if (!draf::_set_rt_control_output(m_control_rt, "v1.0", 0.001, 4)) {
-            close_and_destroy_ctrl_udp(m_control_rt);
-            m_control_rt = nullptr;
             return false;
         }
 
         if (!draf::_start_rt_control(m_control_rt)) {
-            close_and_destroy_ctrl_udp(m_control_rt);
-            m_control_rt = nullptr;
             return false;
         }
 
@@ -158,219 +142,164 @@ template <size_t ID = 0> class Robot {
         return true;
     }
 
+    /**
+     * @brief 로봇 모터를 켜고 실시간 업데이트 타이머 시작
+     */
     [[nodiscard]] ServoOnError servo_on(
         const std::chrono::milliseconds timeout = std::chrono::milliseconds(3000)) 
     {
-        if (m_model.get_model_name() != "m1013") { return ServoOnError::NO_ROBOT_CONTROL_ERROR; }
-
         std::lock_guard<std::mutex> lock(m_control_mutex);
         if (!m_control) { return ServoOnError::NO_ROBOT_CONTROL_ERROR; }
 
-        if (!draf::_set_robot_mode(m_control, ROBOT_MODE_AUTONOMOUS)) {
-            return ServoOnError::SET_ROBOT_MODE_ERROR;
-        }
-
-        if (!draf::_set_robot_control(m_control, CONTROL_RESET_SAFET_OFF)) {
-            return ServoOnError::SET_ROBOT_CONTROL_ERROR;
-        }
+        draf::_set_robot_mode(m_control, ROBOT_MODE_AUTONOMOUS);
+        draf::_set_robot_control(m_control, CONTROL_RESET_SAFET_OFF);
 
         if (!wait_for([this]() { return draf::_get_robot_state(m_control) == STATE_STANDBY; }, timeout)) {
             return ServoOnError::GET_STATE_STANDBY_ERROR;
         }
 
+        // 실시간 제어 준비 완료 시 세이프티 모드 전환
         if (m_is_rt_control_ready.load()) {
-            if (!draf::_set_safety_mode(m_control, SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE)) {
-                return ServoOnError::SET_SAFETY_MODE_ERROR;
-            }
+            draf::_set_safety_mode(m_control, SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
         }
 
+        // 현재 로봇 각도로 TrajGenerator 동기화 후 시작
         const auto start_angles = this->get_current_angles();
         const auto start_angvels = this->get_current_angvels();
-        if (!start_angles.has_value() || !start_angvels.has_value()) {
-            return ServoOnError::GET_ROBOT_STATE_ERROR;
+        if (start_angles.has_value() && start_angvels.has_value()) {
+            m_traj_gen.initialize(m_model, start_angles.value(), start_angvels.value(), angles_t::Zero());
         }
 
-        m_traj_gen.initialize(m_model, start_angles.value(), start_angvels.value(), angles_t::Zero());
         m_update_timer.start();
-
         return ServoOnError::NO_ERROR;
     }
 
-    [[nodiscard]] ServoOffError servo_off(
-        const std::chrono::milliseconds timeout = std::chrono::milliseconds(100)) 
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        std::lock_guard<std::mutex> lock(m_control_mutex);
-        if (!m_control) { return ServoOffError::NO_ROBOT_CONTROL_ERROR; }
-
+    [[nodiscard]] ServoOffError servo_off() {
         m_update_timer.stop();
-
-        if (!draf::_servo_off(m_control, STOP_TYPE_QUICK)) {
-            return ServoOffError::SET_SERVO_OFF_ERROR;
+        std::lock_guard<std::mutex> lock(m_control_mutex);
+        if (m_control && draf::_servo_off(m_control, STOP_TYPE_QUICK)) {
+            return ServoOffError::NO_ERROR;
         }
-
-        if (!wait_for([this]() { return draf::_get_robot_state(m_control) == STATE_SAFE_OFF; }, timeout)) {
-            return ServoOffError::GET_ROBOT_STATE_ERROR;
-        }
-
-        return ServoOffError::NO_ERROR;
+        return ServoOffError::SET_SERVO_OFF_ERROR;
     }
 
     void disconnect_rt() {
         std::lock_guard<std::mutex> lock(m_control_rt_mutex);
-        if (!m_control_rt) { return; }
-
-        draf::_stop_rt_control(m_control_rt);
-        close_and_destroy_ctrl_udp(m_control_rt);
-        m_control_rt = nullptr;
-        m_is_rt_control_ready.store(false);
+        if (m_control_rt) {
+            draf::_stop_rt_control(m_control_rt);
+            close_and_destroy_ctrl_udp(m_control_rt);
+            m_control_rt = nullptr;
+            m_is_rt_control_ready.store(false);
+        }
     }
 
-    [[nodiscard]] CloseConnError close_connection(
-        const std::chrono::milliseconds timeout = std::chrono::milliseconds(100)) 
-    {
+    [[nodiscard]] CloseConnError close_connection() {
         std::lock_guard<std::mutex> lock(m_control_mutex);
-        if (!m_control) { return CloseConnError::NO_ROBOT_CONTROL_ERROR; }
-
-        close_and_destroy_ctrl(m_control);
-        m_control = nullptr;
-
-        if (!wait_for([this]() { return !m_has_control_right.load(); }, timeout)) {
-            return CloseConnError::LOSE_CONTROL_RIGHT_ERROR;
+        if (m_control) {
+            close_and_destroy_ctrl(m_control);
+            m_control = nullptr;
         }
-
         return CloseConnError::NO_ERROR;
     }
 
     //////////////////////////////////////////////////////////////
+    // 🌟 [핵심] 실시간 기구학 및 TCP 정보 인터페이스
+    //////////////////////////////////////////////////////////////
 
-  public:
-    /**
-     * @brief XYZ와 RPY(Degree)를 사용하여 TCP 오프셋을 설정합니다.
-     */
+    /** @brief TCP 오프셋 설정 (XYZ-RPY Degree) */
     void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
         m_traj_gen.set_tcp(x, y, z, r_deg, p_deg, yaw_deg);
     }
 
-    /**
-     * @brief Isometry3d 행렬을 사용하여 TCP 오프셋을 직접 설정합니다.
-     */
-    void set_tcp_tmat(const tmat_t &new_shift_tmat) noexcept { 
-        m_traj_gen.set_tcp_tmat(new_shift_tmat); 
-    }
-
-    /**
-     * @brief 현재 설정된 TCP 정보가 반영된 도구 끝단의 전역 포즈를 반환합니다.
-     */
-    [[nodiscard]] tmat_t get_tcp_tmat() const noexcept { 
+    /** @brief 현재 도구 끝단(TCP)의 전역 포즈 반환 */
+    [[nodiscard]] const tmat_t& get_task_pos() const noexcept { 
         return m_traj_gen.tmat(); 
     }
 
-    [[nodiscard]] bool set_tool(const std::string &lpszSymbol) noexcept {
-        if (!m_control) { return false; }
-        return draf::_set_tool(m_control, lpszSymbol.c_str());
+    /** @brief 현재 Jacobian 행렬 반환 */
+    [[nodiscard]] const jmat_t& get_jacobian() const noexcept { 
+        return m_traj_gen.jmat(); 
     }
 
-    void set_servoj_target_time(const float &new_target_time) noexcept {
-        m_servoj_target_time = std::max(new_target_time, 0.001f);
+    /** @brief 현재 작업 공간(Task) 속도 (v, w) 반환 */
+    [[nodiscard]] const a_t& get_task_vel() const noexcept { 
+        return m_traj_gen.a(); 
     }
-    [[nodiscard]] const float &get_servoj_target_time() const noexcept { return m_servoj_target_time; }
 
-  public:
+    /** @brief 순기구학 계산 (TCP 반영) */
+    [[nodiscard]] tmat_t solve_forward(const angles_t& q) const noexcept {
+        return m_traj_gen.solve_forward(q);
+    }
+
+    /** @brief 역기구학 계산 (현재 위치 기준) */
+    [[nodiscard]] auto solve_inverse(const tmat_t& target_tmat) const noexcept {
+        return m_traj_gen.solve_inverse(m_traj_gen.angles(), target_tmat);
+    }
+
+    //////////////////////////////////////////////////////////////
+    // 🌟 [핵심] Motion Commands (DSR 이식)
+    //////////////////////////////////////////////////////////////
+
     void stop() noexcept { m_traj_gen.stop(); }
 
     [[nodiscard]] bool trapj(
         const angles_t &goal_angles,
         const std::optional<angles_t> &goal_angvels = std::nullopt,
-        const std::optional<angles_t> &peak_angvels = std::nullopt,
-        const std::optional<angles_t> &peak_angaccs = std::nullopt,
+        const std::optional<angles_t> &peak_v = std::nullopt,
+        const std::optional<angles_t> &peak_a = std::nullopt,
         const std::optional<value_t> &duration = std::nullopt) noexcept 
     {
-        if (!m_update_timer.is_running()) { return false; }
-        return m_traj_gen.trapj(goal_angles, goal_angvels, peak_angvels, peak_angaccs, duration);
+        if (!m_update_timer.is_running()) return false;
+        return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()), 
+                                peak_v, peak_a, duration);
     }
 
-    [[nodiscard]] bool attrj(
-        const angles_t &goal_angles, const value_t &kp,
-        const std::optional<angles_t> &goal_angvels = std::nullopt) noexcept 
-    {
-        if (!m_update_timer.is_running()) { return false; }
-        return m_traj_gen.attrj(goal_angles, kp, goal_angvels);
-    }
-
-    // 1️⃣ 원래 있던 행렬용 attrl 래퍼 (쉼표, 주석 제거)
-    [[nodiscard]] bool attrl(const Eigen::Isometry3d &goal_tmat, value_t kp = 50.0) noexcept {
+    /** @brief attrl (절대 좌표 Pose 이동) */
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.attrl(goal_tmat, kp);
     }
 
-    // 2️⃣ 새로 추가한 좌표용 attrl 래퍼
+    /** @brief attrl (상대 좌표 하강 및 수직 정렬) */
     [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.attrl(dx, dy, dz, kp);
     }
-    [[nodiscard]] bool playj(
-        const angles_set_t &goal_angles_set,
-        const std::optional<angles_set_t> &goal_angvels_set = std::nullopt,
-        const std::optional<angles_set_t> &goal_angaccs_set = std::nullopt,
-        const std::optional<angles_t> &peak_angvels = std::nullopt,
-        const std::optional<angles_t> &peak_angaccs = std::nullopt) noexcept 
-    {
-        if (!m_update_timer.is_running()) { return false; }
-        return m_traj_gen.playj(goal_angles_set, goal_angvels_set, goal_angaccs_set, peak_angvels, peak_angaccs);
+
+    /** @brief movel (절대 좌표 XYZ 기반 이동) */
+    [[nodiscard]] bool movel(double x, double y, double z, value_t kp = 50.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        tmat_t target = get_task_pos();
+        target.translation() << x, y, z;
+        return m_traj_gen.attrl(target, kp);
     }
 
-    [[nodiscard]] bool mwait(
-        const std::chrono::milliseconds timeout = std::chrono::milliseconds(10000)) noexcept 
-    {
-        return wait_for([&]() { return get_goal_reached(); }, timeout, std::chrono::milliseconds(1));
-    }
-
-  public:
-    [[nodiscard]] std::optional<ROBOT_STATE> get_robot_state() const noexcept {
-        if (!m_control) { return std::nullopt; }
-        return draf::_get_robot_state(m_control);
-    };
-
-    [[nodiscard]] std::optional<angles_t> get_current_angles() const noexcept {
-        if (!m_control_rt) { return std::nullopt; }
-        const float* pData = draf::_read_data_rt(m_control_rt)->actual_joint_position;
-        return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
-    }
-
-    [[nodiscard]] std::optional<angles_t> get_current_angvels() const noexcept {
-        if (!m_control_rt) { return std::nullopt; }
-        const float* pData = draf::_read_data_rt(m_control_rt)->actual_joint_velocity;
-        return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
-    }
-
-    [[nodiscard]] const angles_t &get_desired_angles() const noexcept { return m_traj_gen.angles(); }
-    [[nodiscard]] const angles_t &get_desired_angvels() const noexcept { return m_traj_gen.angvels(); }
-    [[nodiscard]] const angles_t &get_desired_angaccs() const noexcept { return m_traj_gen.angaccs(); }
-    
     [[nodiscard]] bool get_goal_reached(
-        const std::optional<value_t> &angles_enorm_thold = 0.1,
-        const std::optional<value_t> &pos_enorm_thold = 0.002,
-        const std::optional<value_t> &rot_enorm_thold = 1.0
+        const std::optional<value_t> &q_th = 0.1,
+        const std::optional<value_t> &p_th = 0.002,
+        const std::optional<value_t> &r_th = 1.0
     ) const noexcept { 
-        return m_traj_gen.goal_reached(angles_enorm_thold, pos_enorm_thold, rot_enorm_thold); 
+        return m_traj_gen.goal_reached(q_th, p_th, r_th); 
     }
 
-    std::string get_model_name() const { return m_model.get_model_name(); }
+    //////////////////////////////////////////////////////////////
+    // 🌟 실시간 업데이트 루프 (Internal Timer)
+    //////////////////////////////////////////////////////////////
 
   protected:
     void update() {
-        if (!m_is_rt_control_ready) { return; }
+        if (!m_is_rt_control_ready.load()) return;
 
         const double dt = std::chrono::duration_cast<std::chrono::milliseconds>(
                               m_update_timer.interval).count() / 1000.0;
 
+        // 🌟 TrajGenerator 업데이트 (여기서 모든 기구학, Jacobian, 궤적 계산이 수행됨)
         m_traj_gen.update(dt);
 
         float q[6], q_d1[6], q_d2[6];
-        angles_t des_q = get_desired_angles();
-        angles_t des_dq = get_desired_angvels();
-        angles_t des_ddq = get_desired_angaccs();
+        const angles_t& des_q = m_traj_gen.angles();
+        const angles_t& des_dq = m_traj_gen.angvels();
+        const angles_t& des_ddq = m_traj_gen.angaccs();
 
         for (int i = 0; i < 6; i++) {
             q[i] = static_cast<float>(des_q(i));
@@ -378,62 +307,56 @@ template <size_t ID = 0> class Robot {
             q_d2[i] = static_cast<float>(des_ddq(i));
         }
         
-        draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, get_servoj_target_time());
+        // 두산 로봇 실시간 서보 제어 명령 송신
+        draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, m_servoj_target_time);
+    }
+
+    //////////////////////////////////////////////////////////////
+    // 🌟 데이터 수신 및 유틸리티
+    //////////////////////////////////////////////////////////////
+
+  public:
+    [[nodiscard]] std::optional<angles_t> get_current_angles() const noexcept {
+        if (!m_control_rt) return std::nullopt;
+        const float* pData = draf::_read_data_rt(m_control_rt)->actual_joint_position;
+        return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
+    }
+
+    [[nodiscard]] std::optional<angles_t> get_current_angvels() const noexcept {
+        if (!m_control_rt) return std::nullopt;
+        const float* pData = draf::_read_data_rt(m_control_rt)->actual_joint_velocity;
+        return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
+    }
+
+    void set_digital_output(GPIO_CTRLBOX_DIGITAL_INDEX index, bool value) {
+        if (m_control) draf::_set_digital_output(m_control, index, value);
     }
 
   private:
-    static void TOnMonitoringSpeedModeCB(const MONITORING_SPEED eSpdMode) { }
     static void TOnMonitoringAccessControlCB(const MONITORING_ACCESS_CONTROL eAccCtrl) {
-        switch (eAccCtrl) {
-        case MONITORING_ACCESS_CONTROL_REQUEST:
-            draf::_manage_access_control(m_robot_instance->m_control, MANAGE_ACCESS_CONTROL_RESPONSE_NO);
-            break;
-        case MONITORING_ACCESS_CONTROL_GRANT:
-            m_robot_instance->m_has_control_right.store(true);
-            break;
-        case MONITORING_ACCESS_CONTROL_LOSS:
-            m_robot_instance->m_has_control_right.store(false);
-            break;
-        default: break;
-        }
+        if (eAccCtrl == MONITORING_ACCESS_CONTROL_GRANT) m_robot_instance->m_has_control_right.store(true);
+        else if (eAccCtrl == MONITORING_ACCESS_CONTROL_LOSS) m_robot_instance->m_has_control_right.store(false);
     }
-    static void TOnLogAlarmCB(const LPLOG_ALARM pLogAlarm) { }
     static void TOnTpInitializingCompletedCB() { m_robot_instance->m_is_tp_initialized.store(true); }
     static void TOnDisconnectedCB() { m_robot_instance->m_has_control_right.store(false); }
 
-  private:
     static void close_and_destroy_ctrl(draf::LPROBOTCONTROL pCtrl) {
         if (!pCtrl) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         draf::_close_connection(pCtrl); 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         draf::_DestroyRobotControl(pCtrl); 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     static void close_and_destroy_ctrl_udp(draf::LPROBOTCONTROL pCtrlUDP) {
         if (!pCtrlUDP) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         draf::_disconnect_rt_control(pCtrlUDP); 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         draf::_destroy_robot_control_udp(pCtrlUDP); 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    template <typename T>
-    static void clear_queue(std::queue<T> &queue, std::mutex &mutex) {
-        std::lock_guard<std::mutex> lock(mutex);
-        while (!queue.empty()) { queue.pop(); }
-    }
-
-    [[nodiscard]] static bool wait_for(
-        std::function<bool()> func, const std::chrono::milliseconds timeout,
-        const std::chrono::milliseconds delay = std::chrono::milliseconds(10)) 
-    {
+    [[nodiscard]] static bool wait_for(std::function<bool()> func, const std::chrono::milliseconds timeout) {
         const auto end_time = std::chrono::steady_clock::now() + timeout;
         while (std::chrono::steady_clock::now() < end_time) {
-            if (func()) { return true; }
-            std::this_thread::sleep_for(delay);
+            if (func()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return false;
     }
@@ -453,11 +376,7 @@ template <size_t ID = 0> class Robot {
     std::atomic<bool> m_is_rt_control_ready{};
 
     uon::timer::Timer<int64_t, std::milli> m_update_timer;
-
-    std::queue<LogAlarm> m_log_queue{};
-    std::mutex m_log_queue_mutex;
-
-    float m_servoj_target_time; 
+    float m_servoj_target_time = 0.001f; 
 };
 
 template <size_t ID> Robot<ID> *Robot<ID>::m_robot_instance = nullptr;

@@ -98,7 +98,9 @@ public:
     [[nodiscard]] const angles_t& get_min_angles() const { return m_min_angles; }
     [[nodiscard]] const angles_t& get_max_angles() const { return m_max_angles; }
     [[nodiscard]] const angles_t& get_max_angvels() const { return m_max_angvels; }
-    [[nodiscard]] const angles_t& get_max_angaccs(bool is_attrl = false) const { return m_max_angaccs; }
+    [[nodiscard]] const angles_t& get_max_angaccs() const { return m_max_angaccs; }
+    [[nodiscard]] angles_t get_min_angvels() const noexcept { return -m_max_angvels; }
+    [[nodiscard]] angles_t get_min_angaccs() const noexcept { return -m_max_angaccs; }  
 };
 
 } // namespace model

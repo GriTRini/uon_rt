@@ -1,30 +1,25 @@
 #include <iostream>
-#include <vector>
-#include <iomanip>
 #include <chrono>
 #include <thread>
 #include <csignal>
 #include <atomic>
-#include <string>
+#include <Eigen/Dense>
 #include "../../../rt_control/rt_robot.hpp" 
 
 using namespace rt_control;
 
-// 디지털 출력 9번 인덱스 설정
 const GPIO_CTRLBOX_DIGITAL_INDEX GRIPPER_DO_CH = GPIO_CTRLBOX_DIGITAL_INDEX_9;
-
 std::atomic<bool> keep_running(true);
-void sigint_handler(int signum) { 
-    keep_running = false; 
-}
+void sigint_handler(int signum) { keep_running = false; }
 
 int main() {
     std::signal(SIGINT, sigint_handler);
 
-    // [설정] 로봇 모델 및 IP (1ms 주기 설정)
+    // 1. 로봇 초기화 (HCR14 모델 사용)
     Robot<0> robot("hcr14", std::chrono::milliseconds(1));
     const std::string robot_ip = "192.168.1.30";
     
+    // TCP 설정 (그리퍼 오프셋)
     const double tx = -0.121, ty = -0.121, tz = 0.266;
     const double tr = 60.0, tp = 37.76, tyw = -135.0;
 
@@ -35,76 +30,76 @@ int main() {
     robot.set_tcp(tx, ty, tz, tr, tp, tyw);
     robot.set_digital_output(GRIPPER_DO_CH, false);
 
-    // 🌟 [변경] 카운트 기반 대기 헬퍼 함수
-    // 목표 도달 후 지정된 ms만큼 루프를 돌며 대기합니다.
-    auto wait_with_count = [&](const std::string& task_name, int wait_ms = 0) {
+    // 대기 헬퍼 함수
+    auto wait_until_done = [&](const std::string& task_name, int extra_wait_ms = 0) {
         auto next_wake_time = std::chrono::high_resolution_clock::now();
-        
-        // 1. 목표 도달 확인 루프
         while (keep_running) {
             if (robot.get_goal_reached()) break;
-            
             next_wake_time += std::chrono::milliseconds(1);
             std::this_thread::sleep_until(next_wake_time);
         }
-
-        // 2. 추가 카운트 대기 (그리퍼 작동 시간 등)
-        for (int i = 0; i < wait_ms; ++i) {
+        for (int i = 0; i < extra_wait_ms; ++i) {
             if (!keep_running) break;
             next_wake_time += std::chrono::milliseconds(1);
             std::this_thread::sleep_until(next_wake_time);
         }
-        
         std::cout << "   -> ✅ " << task_name << " 완료" << std::endl;
     };
 
     try {
+        // --- [STEP 0] trapj를 이용한 홈 포지션 이동 ---
+        std::cout << "\n🏠 Home Position으로 이동 (trapj)..." << std::endl;
+        angles_t q_home;
+        q_home << 0.0, 0.0, -90.0, 0.0, -90.0, 0.0; // 초기 각도 설정
+        
+        // trapj(목표각도, 속도비율, 가속도비율)
+        if (robot.trapj(q_home, 0.5, 0.5)) { 
+            wait_until_done("Home 이동");
+        }
+
         while (keep_running) {
-            double mm_x, mm_y, mm_z;
+            std::cout << "\n🚀 시퀀스 시작 (Enter 입력 시 시작, Ctrl+C 종료) >> ";
+            std::cin.get(); 
+
+            // --- [STEP 1] 하강 (attrl) ---
+            std::cout << "👇 하강 시작 (0.1m)..." << std::endl;
             
-            std::cout << "\n📍 목표 좌표 입력 (mm) >> ";
-            if (!(std::cin >> mm_x >> mm_y >> mm_z)) {
-                std::cin.clear();
-                std::cin.ignore(1000, '\n');
-                continue;
+            // 현재의 TCP 좌표(Isometry3d) 가져오기
+            Eigen::Isometry3d current_p = robot.get_task_pos(); 
+            Eigen::Isometry3d down_p = current_p;
+            down_p.translation().z() -= 0.1; // 100mm 아래
+
+            // attrl(목표자세, 속도제한)
+            if (robot.attrl(down_p, 0.1)) { // 0.1 m/s 속도로 하강
+                wait_until_done("Down (attrl)");
             }
 
-            double target_x = mm_x / 1000.0;
-            double target_y = mm_y / 1000.0;
-            double target_z = mm_z / 1000.0;
+            // --- [STEP 2] 그리퍼 작동 ---
+            std::cout << "✊ Gripping..." << std::endl;
+            robot.set_digital_output(GRIPPER_DO_CH, true);
+            wait_until_done("Grip wait", 1000); // 1초 대기
 
-            // --- 시퀀스 시작 ---
-            
-            // 1. Approach (100mm 위)
-            if (robot.movel(target_x, target_y, target_z + 0.1)) {
-                wait_with_count("Approach");
+            // --- [STEP 3] 상승 (attrl) ---
+            std::cout << "👆 상승 시작 (0.1m)..." << std::endl;
+            Eigen::Isometry3d up_p = robot.get_task_pos();
+            up_p.translation().z() += 0.1; // 다시 100mm 위로
 
-                // 2. Down
-                robot.movel(target_x, target_y, target_z);
-                wait_with_count("Down");
-
-                // 3. Grip (잡기 명령 후 1000카운트 대기)
-                std::cout << "✊ 잡기 작동 중..." << std::endl;
-                robot.set_digital_output(GRIPPER_DO_CH, true);
-                wait_with_count("Gripping", 1000); // 1초 대기
-
-                // 4. Lift Up
-                robot.movel(target_x, target_y, target_z + 0.15);
-                wait_with_count("Lift_Up");
-                
-                std::cout << "🎉 피킹 시퀀스 종료" << std::endl;
+            if (robot.attrl(up_p, 0.1)) {
+                wait_until_done("Up (attrl)");
             }
+
+            std::cout << "🎉 한 사이클 완료!" << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cerr << "❌ 에러: " << e.what() << std::endl;
+        std::cerr << "❌ 에러 발생: " << e.what() << std::endl;
     }
 
-    // 종료 정리
+    // 종료 절차
     robot.set_digital_output(GRIPPER_DO_CH, false);
     robot.stop();
-    (void)robot.servo_off();
+    robot.servo_off();
     robot.disconnect_rt();
-    (void)robot.close_connection();
-    
+    robot.close_connection();
+
     return 0;
 }

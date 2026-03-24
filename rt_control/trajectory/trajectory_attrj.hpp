@@ -17,98 +17,97 @@ class TrajAttrJ {
   public:
     TrajAttrJ() = default;
 
-    TrajAttrJ(const model::RobotModel* robot,
-              const angles_t &q, const angles_t &dq, const angles_t &ddq,
-              const angles_t &max_v, const angles_t &max_a) noexcept
+    // DSR 스타일의 생성자 인자 구성
+    TrajAttrJ(const angles_t &q, const angles_t &dq, const angles_t &ddq,
+              const angles_t &min_q, const angles_t &max_q,
+              const angles_t &min_dq, const angles_t &max_dq,
+              const angles_t &min_ddq, const angles_t &max_ddq) noexcept
         : m_angles(q), m_angvels(dq), m_angaccs(ddq),
-          m_goal_angles(q), m_goal_angvels(angles_t::Zero())
+          m_min_angles(min_q), m_max_angles(max_q),
+          m_min_angvels(min_dq), m_max_angvels(max_dq),
+          m_min_angaccs(min_ddq), m_max_angaccs(max_ddq)
     {
-        if (robot) {
-            m_min_angles = robot->get_min_angles();
-            m_max_angles = robot->get_max_angles();
-        } else {
-            m_min_angles = angles_t::Constant(-360.0);
-            m_max_angles = angles_t::Constant(360.0);
-        }
-        m_max_angvels = max_v;
-        m_max_angaccs = max_a;
-
-        // 초기 기본 게인 설정
-        set_pd_gains(10.0);
-
-        update_clip();
+        m_goal_angles = q;
+        m_goal_angvels = angles_t::Zero();
+        
+        // 기본 게인 설정 (DSR은 보통 10~40 사이 사용)
+        set_kp(10.0);
     }
 
+    // TrajGenerator 업데이트 루프에서 호출
     virtual bool update(const value_t &dt) noexcept {
         if (dt <= 0.0) return false;
 
-        // PD 제어: a = Kp*(q_target - q) + Kd*(dq_target - dq)
-        angles_t error = m_goal_angles - m_angles;
-        angles_t error_dot = m_goal_angvels - m_angvels;
-        angles_t target_acc = m_kp.cwiseProduct(error) + m_kd.cwiseProduct(error_dot);
+        // 1. PD Control Law: ddq = Kp * (q_err) + Kd * (dq_err)
+        angles_t q_err = m_goal_angles - m_angles;
+        angles_t dq_err = m_goal_angvels - m_angvels;
         
-        // 가속도 제한
-        m_angaccs = target_acc.cwiseMax(-m_max_angaccs).cwiseMin(m_max_angaccs);
+        // 조인트별 독립 제어
+        angles_t target_ddq = m_kp.cwiseProduct(q_err) + m_kd.cwiseProduct(dq_err);
         
-        // 적분 (속도 제한 포함)
-        m_angvels = (m_angvels + m_angaccs * dt).cwiseMax(-m_max_angvels).cwiseMin(m_max_angvels);
+        // 2. 가속도 제한 (Saturation)
+        m_angaccs = target_ddq.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
+        
+        // 3. 적분 및 속도 제한
+        m_angvels += m_angaccs * dt;
+        m_angvels = m_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
+        
+        // 4. 위치 업데이트
         m_angles += m_angvels * dt;
 
         update_clip();
         return true;
     }
 
-    // --- Getters ---
+    // --- DSR 호환 Getters ---
     [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
     [[nodiscard]] const angles_t& angvels() const noexcept { return m_angvels; }
     [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
     [[nodiscard]] const angles_t& goal_angles() const noexcept { return m_goal_angles; }
+    [[nodiscard]] const angles_t& goal_angvels() const noexcept { return m_goal_angvels; }
 
-    // --- Setters ---
-    /** @brief 목표 각도 설정 (내부에서 조인트 리밋으로 클램핑) */
+    // --- DSR 호환 Setters ---
     void set_goal_angles(const angles_t &new_goal) noexcept { 
         m_goal_angles = new_goal.cwiseMax(m_min_angles).cwiseMin(m_max_angles); 
     }
 
-    /** @brief 개별 Kp 게인 설정 및 자동 임계 댐핑(Kd) 적용 */
-    void set_kp(const angles_t &new_kp) noexcept { 
-        m_kp = new_kp; 
+    void set_goal_angvels(const angles_t &new_goal_dq) noexcept {
+        m_goal_angvels = new_goal_dq.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
+    }
+
+    /** @brief DSR 스타일의 단일 값 Kp 설정 (임계 댐핑 Kd 자동 계산) */
+    void set_kp(value_t kp) noexcept {
+        m_kp = angles_t::Constant(kp);
+        // Kd = 2 * sqrt(Kp)
+        m_kd = angles_t::Constant(2.0 * std::sqrt(std::max(0.0, kp)));
+    }
+
+    /** @brief 조인트별 개별 Kp 설정 */
+    void set_kp(const angles_t &kp_vec) noexcept {
+        m_kp = kp_vec;
         for(int i = 0; i < 6; ++i) {
-            // Kd = 2 * sqrt(Kp) : 임계 댐핑 조건
             m_kd(i) = 2.0 * std::sqrt(std::max(0.0, m_kp(i)));
         }
     }
 
-    /** @brief 개별 Kd 게인 수동 설정 */
-    void set_kd(const angles_t &new_kd) noexcept { 
-        m_kd = new_kd; 
-    }
-
-    /** @brief 단일 value_t 값으로 전체 관절 PD 게인 설정 */
-    void set_pd_gains(value_t kp) noexcept {
-        m_kp = angles_t::Constant(kp);
-        m_kd = angles_t::Constant(2.0 * std::sqrt(std::max(0.0, kp)));
-    }
+    void set_kd(const angles_t &kd_vec) noexcept { m_kd = kd_vec; }
 
   protected:
     void update_clip() noexcept {
-        m_angles  = m_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
-        m_angvels = m_angvels.cwiseMax(-m_max_angvels).cwiseMin(m_max_angvels);
-        m_angaccs = m_angaccs.cwiseMax(-m_max_angaccs).cwiseMin(m_max_angaccs);
+        // 하드웨어 한계를 넘지 않도록 최종 클램핑
+        m_angles = m_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
     }
 
   protected:
-    angles_t m_angles = angles_t::Zero();
-    angles_t m_angvels = angles_t::Zero();
-    angles_t m_angaccs = angles_t::Zero();
-    
-    angles_t m_goal_angles = angles_t::Zero();
-    angles_t m_goal_angvels = angles_t::Zero();
+    angles_t m_angles, m_angvels, m_angaccs;
+    angles_t m_goal_angles, m_goal_angvels;
     
     angles_t m_kp, m_kd; 
     
+    // DSR은 상하한을 각각 관리하므로 min/max 구조 유지
     angles_t m_min_angles, m_max_angles;
-    angles_t m_max_angvels, m_max_angaccs;
+    angles_t m_min_angvels, m_max_angvels;
+    angles_t m_min_angaccs, m_max_angaccs;
 };
 
 } // namespace trajectory
