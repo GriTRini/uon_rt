@@ -31,7 +31,7 @@ class TrajAttrJ {
         m_goal_angvels = angles_t::Zero();
         
         // 기본 게인 설정 (DSR은 보통 10~40 사이 사용)
-        set_kp(10.0);
+        set_kp(150.0);
     }
 
     // TrajGenerator 업데이트 루프에서 호출

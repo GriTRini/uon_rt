@@ -20,7 +20,7 @@ class TrajAttrL : public TrajAttrJ {
     using a_t = Eigen::Matrix<value_t, 6, 1>;
 
   public:
-    TrajAttrL() : m_kp(40.0) {}
+    TrajAttrL() : m_kp(50.0) {}
 
     TrajAttrL(const model::RobotModel* model, 
               const angles_t &q, const angles_t &dq, const angles_t &ddq,
@@ -29,7 +29,7 @@ class TrajAttrL : public TrajAttrJ {
                model->get_min_angles(), model->get_max_angles(),
                model->get_min_angvels(), model->get_max_angvels(),
                model->get_min_angaccs(), model->get_max_angaccs()),
-          m_model(model), m_tcp_offset(tcp_offset), m_kp(40.0) 
+          m_model(model), m_tcp_offset(tcp_offset), m_kp(50.0) 
     {
         auto [initial_pose, J] = ik::compute_forward_and_jacobian(m_model, q, m_tcp_offset);
         m_goal_tmat = initial_pose;
@@ -68,7 +68,7 @@ class TrajAttrL : public TrajAttrJ {
         // 5. Jacobian Damped Least Squares (DLS)
         // 회전이 잘 안 먹는다면 lambda를 살짝 줄여보거나(0.005), 
         // Jacobian의 하부(Rotation 부분) 가중치를 확인해야 합니다.
-        double lambda = 0.005; // Damping factor
+        double lambda = 0.01; // Damping factor
         Eigen::Matrix<double, 6, 6> JJT = J_curr * J_curr.transpose();
         JJT += (lambda * lambda) * Eigen::Matrix<double, 6, 6>::Identity();
         

@@ -48,7 +48,7 @@ template <size_t ID = 0> class Robot {
           m_is_tp_initialized(false), 
           m_has_control_right(false),
           m_is_rt_control_ready(false), 
-          m_servoj_target_time(0.05f)
+          m_servoj_target_time(0.01f)
     {
         // TrajGenerator 초기화 (Zero 상태로 시작)
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
@@ -268,11 +268,11 @@ template <size_t ID = 0> class Robot {
     /**
      * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 바닥(-Z)을 수직으로 바라보도록 자세를 정렬합니다.
      */
-    [[nodiscard]] bool align_tcp_to_floor(value_t kp = 100.0) noexcept {
+    [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, value_t kp = 100.0) noexcept {
         if (!m_update_timer.is_running()) return false;
-        return m_traj_gen.align_tcp_to_floor(kp);
+        return m_traj_gen.align_tcp_to_floor(yaw_deg, kp);
     }
-
+    
     /**
      * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 정면(X)을 수평으로 바라보도록 자세를 정렬합니다.
      */
@@ -386,7 +386,7 @@ template <size_t ID = 0> class Robot {
     std::atomic<bool> m_is_rt_control_ready{};
 
     uon::timer::Timer<int64_t, std::milli> m_update_timer;
-    float m_servoj_target_time = 0.05f; 
+    float m_servoj_target_time = 0.01f; 
 };
 
 template <size_t ID> Robot<ID> *Robot<ID>::m_robot_instance = nullptr;

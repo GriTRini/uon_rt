@@ -169,21 +169,51 @@ class TrajGenerator {
         return true;
     }
 
-    [[nodiscard]] bool align_tcp_to_floor(const value_t &kp = 100.0) noexcept {
-        tmat_t target = m_tmat; // 현재 위치(translation)는 그대로 유지
-        target.linear() << 1,  0,  0,
-                           0, -1,  0,
-                           0,  0, -1; // 월드 좌표계 기준 바닥 방향
-        return attrl(target, kp);     // 내부적으로 attrl을 재활용하여 구동
+    // 🌟 1. 바닥(-Z) 방향으로 TCP 정렬 (손목 위치 고정 방식)
+    [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, const value_t &kp = 100.0) noexcept {
+        // 1. 현재 손목(Flange) 포즈 역산
+        tmat_t T_flange_current = m_tmat * m_tcp_offset.inverse();
+
+        // 2. 기본 바닥 방향 (Z는 바닥(-Z), X는 월드 정면(+X))
+        Eigen::Matrix3d R_base;
+        R_base << 1,  0,  0,
+                  0, -1,  0,
+                  0,  0, -1; 
+
+        // 3. 사용자가 입력한 각도(yaw_deg)만큼 Z축을 기준으로 회전시켜 X, Y 방향 조절!
+        Eigen::Matrix3d R_down = Eigen::AngleAxisd(yaw_deg * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix() * R_base;
+
+        // 4. 새로운 손목 포즈 (위치는 그대로 고정, 자세는 역산)
+        tmat_t T_flange_new = Eigen::Isometry3d::Identity();
+        T_flange_new.translation() = T_flange_current.translation();
+        T_flange_new.linear() = R_down * m_tcp_offset.linear().inverse();
+
+        // 5. 로봇이 추종할 최종 TCP 목표 포즈 생성
+        tmat_t target_tcp = T_flange_new * m_tcp_offset;
+
+        return attrl(target_tcp, kp);
     }
 
-    // 🌟 추가 2 (보너스): 정면(X) 방향으로 TCP 정렬 (벽면 작업용)
+    // 🌟 2. 정면(X) 방향으로 TCP 정렬 (벽면 작업용, 손목 위치 고정 방식)
     [[nodiscard]] bool align_tcp_to_front(const value_t &kp = 100.0) noexcept {
-        tmat_t target = m_tmat;
-        target.linear() << 0,  0,  1,
-                           0,  1,  0,
-                          -1,  0,  0; // 월드 좌표계 기준 정면(X축) 방향
-        return attrl(target, kp);
+        // 1. 현재 손목(Flange) 포즈 역산
+        tmat_t T_flange_current = m_tmat * m_tcp_offset.inverse();
+
+        // 2. 정면을 향하는 목표 회전 행렬
+        Eigen::Matrix3d R_front;
+        R_front << 0,  0,  1,
+                   0,  1,  0,
+                  -1,  0,  0; 
+
+        // 3. 새로운 손목 포즈
+        tmat_t T_flange_new = Eigen::Isometry3d::Identity();
+        T_flange_new.translation() = T_flange_current.translation();
+        T_flange_new.linear() = R_front * m_tcp_offset.linear().inverse();
+
+        // 4. 로봇이 추종할 최종 TCP 목표 포즈 생성
+        tmat_t target_tcp = T_flange_new * m_tcp_offset;
+
+        return attrl(target_tcp, kp);
     }
 
     // --- Kinematics Solvers ---
