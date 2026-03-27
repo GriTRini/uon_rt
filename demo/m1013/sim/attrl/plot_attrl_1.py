@@ -92,4 +92,4 @@ def animate_flange_tracking(file_path):
 
 if __name__ == "__main__":
     # 방금 생성한 CSV 파일 이름과 정확히 일치해야 합니다.
-    animate_flange_tracking('flange_fig8_sim_data.csv')
+    animate_flange_tracking('flange_fig8_sim_data_1.csv')

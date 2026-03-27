@@ -18,8 +18,8 @@ public:
         double enorm_threshold,
         double damping) 
     {
-        // 🌟 하위 함수인 solve_step_dls로 tcp_offset을 전달합니다.
-        return solve_step_dls(model, target_pose, seed_q_deg, tcp_offset, step_max, enorm_threshold, damping);
+        // 🌟 하위 함수인 solve_step_qp로 tcp_offset을 전달합니다.
+        return solve_step_qp(model, target_pose, seed_q_deg, tcp_offset, step_max, enorm_threshold, damping);
     }
 };
 
