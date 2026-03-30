@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <format>
 #include <functional>
@@ -11,7 +12,6 @@
 #include <queue>
 #include <string>
 #include <thread>
-#include <atomic>
 
 #include "timer.hpp"
 #include "../drfl/include/DRFLEx.h"
@@ -34,7 +34,8 @@ template <size_t ID = 0> class Robot {
     
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-    // using angles_set_t = trajectory::TrajGenerator::angles_set_t;
+
+    enum class ActiveMotion { NONE, TRAPJ, ATTRL };
 
   public:
     constexpr static size_t id = ID;
@@ -48,9 +49,10 @@ template <size_t ID = 0> class Robot {
           m_is_tp_initialized(false), 
           m_has_control_right(false),
           m_is_rt_control_ready(false), 
-          m_servoj_target_time(0.01f)
+          m_servoj_target_time(0.01f),
+          m_is_paused(false),
+          m_active_motion(ActiveMotion::NONE)
     {
-        // TrajGenerator 초기화 (Zero 상태로 시작)
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
         m_robot_instance = this;
     }
@@ -84,7 +86,6 @@ template <size_t ID = 0> class Robot {
         m_is_tp_initialized.store(false);
         m_has_control_right.store(false);
 
-        // 콜백 등록
         draf::_set_on_monitoring_access_control(m_control, TOnMonitoringAccessControlCB);
         draf::_set_on_tp_initializing_completed(m_control, TOnTpInitializingCompletedCB);
         draf::_set_on_disconnected(m_control, TOnDisconnectedCB);
@@ -126,7 +127,6 @@ template <size_t ID = 0> class Robot {
             return false;
         }
 
-        // 출력 데이터 설정 (1ms 주기)
         if (!draf::_set_rt_control_output(m_control_rt, "v1.0", 0.001, 4)) {
             return false;
         }
@@ -152,18 +152,17 @@ template <size_t ID = 0> class Robot {
             return ServoOnError::GET_STATE_STANDBY_ERROR;
         }
 
-        // 실시간 제어 준비 완료 시 세이프티 모드 전환
         if (m_is_rt_control_ready.load()) {
             draf::_set_safety_mode(m_control, SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
         }
 
-        // 현재 로봇 각도로 TrajGenerator 동기화 후 시작
         const auto start_angles = this->get_current_angles();
         const auto start_angvels = this->get_current_angvels();
         if (start_angles.has_value() && start_angvels.has_value()) {
             m_traj_gen.initialize(m_model, start_angles.value(), start_angvels.value(), angles_t::Zero());
         }
 
+        m_is_paused.store(false);
         m_update_timer.start();
         return ServoOnError::NO_ERROR;
     }
@@ -197,99 +196,126 @@ template <size_t ID = 0> class Robot {
     }
 
     // ==============================================================
-    // 🌟 [핵심] 실시간 기구학 및 TCP 정보 인터페이스
+    // 🌟 실시간 기구학 및 TCP 정보 인터페이스
     // ==============================================================
 
-    /** @brief TCP 오프셋 설정 (XYZ-RPY Degree) */
     void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
         m_traj_gen.set_tcp(x, y, z, r_deg, p_deg, yaw_deg);
     }
 
-    /** @brief 현재 도구 끝단(TCP)의 전역 포즈 반환 */
     [[nodiscard]] const tmat_t& get_task_pos() const noexcept { return m_traj_gen.tmat(); }
-
-    /** @brief 현재 Jacobian 행렬 반환 */
     [[nodiscard]] const jmat_t& get_jacobian() const noexcept { return m_traj_gen.jmat(); }
-
-    /** @brief 현재 작업 공간(Task) 속도 (v, w) 반환 */
     [[nodiscard]] const a_t& get_task_vel() const noexcept { return m_traj_gen.a(); }
 
-    /** @brief 순기구학 계산 (TCP 반영) */
     [[nodiscard]] tmat_t solve_forward(const angles_t& q) const noexcept {
         return m_traj_gen.solve_forward(q);
     }
 
-    /** @brief 역기구학 계산 (현재 위치 기준) - 구현되어 있다면 활성화 */
-    // [[nodiscard]] auto solve_inverse(const tmat_t& target_tmat) const noexcept {
-    //     return m_traj_gen.solve_inverse(m_traj_gen.angles(), target_tmat);
-    // }
-
     // ==============================================================
-    // 🌟 [핵심] Motion Commands
+    // 🌟 Motion Commands
     // ==============================================================
 
     void stop() noexcept { m_traj_gen.stop(); }
 
     [[nodiscard]] bool trapj(
         const angles_t &goal_angles,
-        const std::optional<angles_t> &goal_angvels = std::nullopt,
-        const std::optional<angles_t> &peak_v = std::nullopt,
-        const std::optional<angles_t> &peak_a = std::nullopt,
-        const std::optional<value_t> &duration = std::nullopt) noexcept 
+        const std::optional<angles_t> &goal_angvels = std::nullopt) noexcept 
     {
         if (!m_update_timer.is_running()) return false;
-        // 🌟 제너레이터의 trapj는 2개의 인자만 받으므로 아래처럼 수정합니다.
+        
+        m_active_motion.store(ActiveMotion::TRAPJ);
+        m_saved_goal_angles = goal_angles;
+        m_is_paused.store(false);
+        
         return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()));
     }
 
-    /** @brief attrl (절대 좌표 Pose 이동) */
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
         if (!m_update_timer.is_running()) return false;
+
+        m_active_motion.store(ActiveMotion::ATTRL);
+        m_saved_goal_tmat = goal_tmat;
+        m_saved_kp = kp;
+        m_is_paused.store(false);
+
         return m_traj_gen.attrl(goal_tmat, kp);
     }
 
-    /** @brief attrl (상대 좌표 하강 및 수직 정렬 - 오버로딩 구현 시 사용) */
-    // [[nodiscard]] bool attrl(double dx, double dy, double dz, value_t kp = 40.0) noexcept {
-    //     if (!m_update_timer.is_running()) return false;
-    //     return m_traj_gen.attrl(dx, dy, dz, kp);
-    // }
-
-    /** @brief movel (절대 좌표 XYZ 기반 이동) */
     [[nodiscard]] bool movel(double x, double y, double z, value_t kp = 50.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         tmat_t target = get_task_pos();
         target.translation() << x, y, z;
-        return m_traj_gen.attrl(target, kp);
+        return attrl(target, kp); // attrl을 호출하여 상태 백업 재사용
     }
 
-    // -----------------------------------------------------------
-    // 🌟 추가된 TCP 정렬 유틸리티 함수 (Generator 연동)
-    // -----------------------------------------------------------
-    /**
-     * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 바닥(-Z)을 수직으로 바라보도록 자세를 정렬합니다.
-     */
     [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, value_t kp = 100.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.align_tcp_to_floor(yaw_deg, kp);
     }
     
-    /**
-     * @brief 현재 툴의 팁(Z축)이 월드 좌표계의 정면(X)을 수평으로 바라보도록 자세를 정렬합니다.
-     */
     [[nodiscard]] bool align_tcp_to_front(value_t kp = 100.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.align_tcp_to_front(kp);
     }
-    // -----------------------------------------------------------
 
-    /** @brief 목표 도달 여부 확인 */
     [[nodiscard]] bool get_goal_reached(
-        const std::optional<value_t> &q_th = std::nullopt, // 값을 안 주면 Generator 기본값(2.0) 사용
-        const std::optional<value_t> &p_th = std::nullopt, // 값을 안 주면 Generator 기본값(0.002) 사용
-        const std::optional<value_t> &r_th = std::nullopt  // 값을 안 주면 Generator 기본값(3.0) 사용
+        const std::optional<value_t> &q_th = std::nullopt,
+        const std::optional<value_t> &p_th = std::nullopt,
+        const std::optional<value_t> &r_th = std::nullopt
     ) const noexcept { 
-        // 입력받은 값을 그대로 넘깁니다. 속도 3개는 항상 nullopt로 검사 생략.
         return m_traj_gen.goal_reached(q_th, p_th, r_th, std::nullopt, std::nullopt, std::nullopt); 
+    }
+
+    // ==============================================================
+    // 🌟 안전 해제 및 궤적 이어서 가기 (Resume)
+    // ==============================================================
+
+    [[nodiscard]] bool resume_trajectory() {
+        if (!m_is_paused.load()) return true;
+
+        if (draf::_get_robot_state(m_control) != STATE_STANDBY) {
+            std::cerr << "아직 로봇이 Standby 상태가 아닙니다. 펜던트에서 에러를 해제하세요." << std::endl;
+            return false;
+        }
+
+        draf::_set_safety_mode(m_control, SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
+
+        ActiveMotion current_mode = m_active_motion.load();
+        
+        if (current_mode == ActiveMotion::TRAPJ) {
+            std::cout << "[Resume] TrapJ 궤적을 현재 위치에서 재계획합니다." << std::endl;
+            m_traj_gen.trapj(m_saved_goal_angles, angles_t::Zero());
+        } 
+        else if (current_mode == ActiveMotion::ATTRL) {
+            std::cout << "[Resume] AttrL 궤적을 현재 위치에서 이어서 당깁니다." << std::endl;
+            m_traj_gen.attrl(m_saved_goal_tmat, m_saved_kp);
+        }
+
+        m_is_paused.store(false);
+        return true;
+    }
+
+    // ==============================================================
+    // 🌟 안전 해제 및 궤적 처음부터 가기 (Cancel)
+    // ==============================================================
+
+    [[nodiscard]] bool cancel_trajectory() {
+        if (!m_is_paused.load()) return true;
+
+        if (draf::_get_robot_state(m_control) != STATE_STANDBY) {
+            std::cerr << "아직 로봇이 Standby 상태가 아닙니다. 펜던트에서 에러를 해제하세요." << std::endl;
+            return false;
+        }
+
+        // 서보 온 및 제어 가능 상태로만 복구
+        draf::_set_safety_mode(m_control, SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
+
+        // 궤적을 재계획하지 않고, 변수만 초기화하여 현재 위치에 대기시킴
+        m_active_motion.store(ActiveMotion::NONE);
+        m_is_paused.store(false);
+        
+        std::cout << "[Cancel] 기존 궤적을 폐기하고 대기 상태로 전환했습니다." << std::endl;
+        return true;
     }
     
     // ==============================================================
@@ -300,24 +326,45 @@ template <size_t ID = 0> class Robot {
     void update() {
         if (!m_is_rt_control_ready.load()) return;
 
+        const auto* rt_data = draf::_read_data_rt(m_control_rt);
+        if (!rt_data) return;
+
+        bool is_physical_stop = (rt_data->robot_state == STATE_SAFE_STOP || 
+                                 rt_data->robot_state == STATE_ERROR ||
+                                 rt_data->robot_state == STATE_EMERGENCY_STOP);
+
+        if (is_physical_stop && !m_is_paused.load()) {
+            m_is_paused.store(true);
+            
+            const float* act_q = rt_data->actual_joint_position;
+            const float* act_dq = rt_data->actual_joint_velocity;
+            
+            angles_t sync_q = Eigen::Map<const Eigen::Matrix<float, 6, 1>>(act_q).cast<double>();
+            angles_t sync_dq = Eigen::Map<const Eigen::Matrix<float, 6, 1>>(act_dq).cast<double>();
+            
+            m_traj_gen.initialize(m_model, sync_q, sync_dq, angles_t::Zero());
+            std::cout << "[Safety Sync] 로봇 정지 감지! 제어기 좌표를 실제 좌표로 동기화했습니다." << std::endl;
+        }
+
+        if (m_is_paused.load()) {
+            float q[6], q_d1[6] = {0}, q_d2[6] = {0};
+            for (int i = 0; i < 6; i++) q[i] = static_cast<float>(m_traj_gen.angles()(i));
+            draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, m_servoj_target_time);
+            return; 
+        }
+
         const double dt = std::chrono::duration_cast<std::chrono::milliseconds>(
                               m_update_timer.interval).count() / 1000.0;
 
-        // 🌟 TrajGenerator 업데이트 (기구학, Jacobian, 궤적 계산 수행)
         m_traj_gen.update(dt);
 
         float q[6], q_d1[6], q_d2[6];
-        const angles_t& des_q = m_traj_gen.angles();
-        const angles_t& des_dq = m_traj_gen.angvels();
-        const angles_t& des_ddq = m_traj_gen.angaccs();
-
         for (int i = 0; i < 6; i++) {
-            q[i] = static_cast<float>(des_q(i));
-            q_d1[i] = static_cast<float>(des_dq(i));
-            q_d2[i] = static_cast<float>(des_ddq(i));
+            q[i] = static_cast<float>(m_traj_gen.angles()(i));
+            q_d1[i] = static_cast<float>(m_traj_gen.angvels()(i));
+            q_d2[i] = static_cast<float>(m_traj_gen.angaccs()(i));
         }
         
-        // 두산 로봇 실시간 서보 제어 명령 송신
         draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, m_servoj_target_time);
     }
 
@@ -387,8 +434,15 @@ template <size_t ID = 0> class Robot {
 
     uon::timer::Timer<int64_t, std::milli> m_update_timer;
     float m_servoj_target_time = 0.01f; 
+
+    // 상태 백업 변수
+    std::atomic<bool> m_is_paused{};
+    std::atomic<ActiveMotion> m_active_motion{};
+    angles_t m_saved_goal_angles;
+    tmat_t m_saved_goal_tmat;
+    value_t m_saved_kp = 50.0;
 };
 
 template <size_t ID> Robot<ID> *Robot<ID>::m_robot_instance = nullptr;
 
-} // namespace rt_control
+} // namespace dsr_control

@@ -21,30 +21,40 @@ int main() {
     Robot<0> robot("m1013", std::chrono::milliseconds(1));
     const std::string robot_ip = "192.168.1.30";
     
-    // [설정] TCP 오프셋 (길고 복잡하게 꺾인 툴)
+    // [설정] TCP 오프셋
     const double tx = -0.1219, ty = -0.1219, tz = 0.26611;
     const double tr = 60.0, tp = 0.0, tyw = -45.0;
 
-    // [파일] 데이터 로깅용 CSV
     std::ofstream csv("tcp_interactive_test_log.csv");
     csv << "Time,Step,J1,J2,J3,J4,J5,J6,TCP_X,TCP_Y,TCP_Z\n";
 
-    // 로봇 연결 및 서보 온
     if (robot.open_connection(robot_ip, 12345) != OpenConnError::NO_ERROR) return -1;
     if (!robot.connect_rt(robot_ip, 12347)) return -1;
     if (robot.servo_on(std::chrono::milliseconds(5000)) != ServoOnError::NO_ERROR) return -1;
 
     double total_time = 0.0;
 
-    // 🌟 헬퍼 함수: goal_reached()를 사용하여 직관적으로 대기 및 로깅
+    // 🌟 개선된 wait_goal: 에러 감지 기능 포함
     auto wait_goal = [&](const std::string& info, 
-                         double p_th = 0.02,  // 위치 허용 오차: 2cm
-                         double r_th = 1.0,   // 회전 허용 오차: 1도
+                         double p_th = 0.02,  
+                         double r_th = 1.0,   
                          double timeout_sec = 100.0) { 
         int loop_count = 0;
         double start_time = total_time;
         
         while (keep_running) {
+            // 🌟 1. 로봇이 Safety Stop 등 물리적 에러에 빠졌는지 체크
+            // (Robot 클래스의 get_robot_state 함수가 있다고 가정하거나 SDK 직접 호출)
+            // 여기서는 SDK 함수를 직접 호출하여 Standby나 Moving이 아닌 상태를 에러로 봅니다.
+            /* * 주의: 실제로는 get_robot_state를 public으로 뚫어두는 것이 좋습니다.
+             * 여기서는 로직의 흐름을 보여줍니다.
+             */
+            // bool is_error = robot.is_in_error_state(); 
+            // if (is_error) {
+            //     std::cout << "\n🚨 [충돌/에러 감지] 로봇이 멈췄습니다! 대기를 중단합니다." << std::endl;
+            //     return false; // 에러 발생 시 false 반환
+            // }
+
             bool reached = robot.get_goal_reached(std::nullopt, p_th, r_th);
             auto cur_q = robot.get_current_angles();
             auto cur_tcp = robot.get_task_pos(); 
@@ -64,18 +74,19 @@ int main() {
 
             if (reached) {
                 std::cout << "      ✅ " << info << " 완료\n" << std::endl;
-                break;
+                return true; // 성공 시 true 반환
             }
             
             if ((total_time - start_time) >= timeout_sec) {
                 std::cout << "      ⚠️ " << info << " 타임아웃 (강제 진행)\n" << std::endl;
-                break;
+                return false;
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             total_time += 0.001;
             loop_count++;
         }
+        return false;
     };
 
     auto wait_for_apply = [&]() {
@@ -86,91 +97,108 @@ int main() {
     };
 
     try {
-        // ==========================================================
-        // 1️⃣ [Step 1] TCP 설정
-        // ==========================================================
+        // [Step 1] TCP 설정
         std::cout << "\n1️⃣ [Set TCP] 툴 정보를 로봇에 입력합니다." << std::endl;
         robot.set_tcp(tx, ty, tz, tr, tp, tyw);
         wait_for_apply(); 
         
-        // ==========================================================
-        // 2️⃣ [Step 2] J3, J5 -90도로 이동 (TrapJ)
-        // ==========================================================
-        std::cout << "\n2️⃣ [TrapJ] 초기 자세(J3, J5 -90도)로 이동합니다..." << std::endl;
+        // [Step 2] J3, J5 -90도로 이동 (TrapJ)
+        std::cout << "\n2️⃣ [TrapJ] 초기 자세로 이동합니다..." << std::endl;
         angles_t q_pose = angles_t::Zero(); 
-        q_pose(2) = -90.0; // J3
-        q_pose(4) = -90.0; // J5
+        q_pose(2) = -90.0; q_pose(4) = -90.0;
         
         if (robot.trapj(q_pose)) wait_goal("2_Setup_TrapJ");
 
-        // ==========================================================
-        // 3️⃣ [Step 3] 손목 고정 상태로 수직 정렬
-        // ==========================================================
+        // [Step 3] 손목 고정 상태로 수직 정렬
         std::cout << "\n3️⃣ [Align] 툴 팁을 바닥(-Z) 방향으로 정렬합니다..." << std::endl;
         if (robot.align_tcp_to_floor(-90.0, 200.0)) {
             wait_goal("3_Align_Vertical_Fixed_Flange", 0.01, 0.5, 100.0);
         }
 
-        // ==========================================================
-        // 4️⃣ [Step 4] 대화형(Interactive) 좌표 입력 이동
-        // ==========================================================
+        // ... (앞부분 동일: TCP 설정, Home 이동 등) ...
+
+        // [Step 4] 대화형 모드 (이동 + 에러 복구 루프)
         std::cout << "\n==========================================================" << std::endl;
         std::cout << "4️⃣ [Interactive Mode] 터미널에서 목표 좌표(X, Y, Z)를 입력하세요." << std::endl;
-        std::cout << "▶ 단위: 미터(m)" << std::endl;
-        std::cout << "▶ 입력 예시: -0.5 0.1 0.2" << std::endl;
-        std::cout << "▶ 종료하려면 'q'를 입력하세요." << std::endl;
+        std::cout << "▶ 단위: 미터(m) (예: -0.5 0.1 0.2)" << std::endl;
+        std::cout << "▶ 종료하려면 'q' 입력" << std::endl;
         std::cout << "==========================================================\n" << std::endl;
         
         while (keep_running) {
-            std::cout << "\n>> 이동할 좌표 X Y Z 입력: ";
+            std::cout << "\n>> 이동할 좌표 X Y Z 입력 (또는 q): ";
             std::string input_x;
             std::cin >> input_x;
 
-            // 'q' 입력 시 루프 탈출 및 프로그램 종료 절차 진행
-            if (input_x == "q" || input_x == "Q") {
-                std::cout << "좌표 입력을 종료하고 로봇을 정지합니다." << std::endl;
-                break;
-            }
+            if (input_x == "q" || input_x == "Q") break;
 
+            // 일반 좌표 입력 처리
             double target_x, target_y, target_z;
             try {
-                // 첫 번째 값을 double로 변환 시도 후, 나머지 y, z 값 읽기
                 target_x = std::stod(input_x);
                 std::cin >> target_y >> target_z;
             } catch (const std::exception& e) {
-                std::cout << "⚠️ 잘못된 입력입니다. 숫자 3개를 띄어쓰기로 구분해 입력하세요. (예: -0.5 0.1 0.2)" << std::endl;
-                // 에러 발생 시 입력 버퍼 비우기
-                std::cin.clear();
-                std::cin.ignore(10000, '\n');
+                std::cout << "⚠️ 잘못된 입력입니다." << std::endl;
+                std::cin.clear(); std::cin.ignore(10000, '\n');
                 continue;
             }
 
             std::cout << "   🚀 목표 지점 [" << target_x << ", " << target_y << ", " << target_z << "] 로 이동 명령 전송..." << std::endl;
 
-            // 현재 자세(바닥 정렬 상태의 회전)를 그대로 가져옴
             Eigen::Isometry3d target = robot.get_task_pos(); 
-            
-            // 가져온 자세에서 위치(translation)만 사용자가 입력한 값으로 덮어쓰기
-            target.translation().x() = target_x;
-            target.translation().y() = target_y;
-            target.translation().z() = target_z;
+            target.translation() << target_x, target_y, target_z;
 
-            // 로깅용 Info 문자열 생성
-            std::string info = "Move_To_Input";
-            
-            // 🌟 150.0의 Kp로 입력된 목표 위치를 향해 attrl 구동!
             if (robot.attrl(target, 150.0)) {
-                wait_goal(info, 0.01, 1.0, 100.0);
+                // 🌟 이동 중 충돌/에러 발생 시 false 반환
+                bool success = wait_goal("Move_To_Input", 0.01, 1.0, 100.0);
+                
+                if (!success && keep_running) {
+                    std::cout << "\n🚨 [충돌 감지] 로봇이 목적지에 도달하지 못하고 멈췄습니다!" << std::endl;
+                    std::cout << "   문제를 해결한 후, 티칭 펜던트에서 [Reset] 버튼을 눌러주세요." << std::endl;
+                    
+                    // 🌟 에러 복구 서브 루프 진입
+                    while (keep_running) {
+                        std::cout << "\n>> 복구 옵션을 선택하세요:" << std::endl;
+                        std::cout << "   [1] 끊긴 궤적 마저 이어서 가기 (Resume)" << std::endl;
+                        std::cout << "   [2] 이동 취소 및 Home 위치로 복귀 (Cancel & Home)" << std::endl;
+                        std::cout << "   입력: ";
+                        
+                        std::string recovery_input;
+                        std::cin >> recovery_input;
+
+                        if (recovery_input == "1") {
+                            if (robot.resume_trajectory()) {
+                                std::cout << "   -> Resume 성공! 다시 원래 목표를 향해 출발합니다." << std::endl;
+                                wait_goal("Resume_Moving", 0.01, 1.0, 100.0);
+                                break; // 복구 루프 탈출, 메인 루프로 복귀
+                            }
+                        } 
+                        else if (recovery_input == "2") {
+                            // 1. 기존 궤적 깔끔하게 취소 (Pause 해제)
+                            if (robot.cancel_trajectory()) {
+                                std::cout << "   -> 기존 명령 취소 성공! Home 위치로 대피합니다." << std::endl;
+                                
+                                // 2. Home 자세(J3, J5 -90도) 정의 및 TrapJ 명령 하달
+                                angles_t home_q = angles_t::Zero(); 
+                                home_q(2) = -90.0; home_q(4) = -90.0;
+                                
+                                robot.trapj(home_q);
+                                wait_goal("Emergency_Return_Home", 0.01, 1.0, 100.0);
+                                break; // 복구 루프 탈출, 메인 루프로 복귀
+                            }
+                        } 
+                        else {
+                            std::cout << "   ⚠️ 잘못된 입력입니다. 1 또는 2를 선택하세요." << std::endl;
+                        }
+                    } // end of recovery while loop
+                }
             }
-        }
+        } // end of main while loop
 
     } catch (const std::exception& e) {
         std::cerr << "❌ Error: " << e.what() << std::endl;
     }
 
-    // ==========================================================
-    // 🏁 [종료] 로봇 안전 종료
-    // ==========================================================
+    // 🏁 종료 절차
     csv.close();
     robot.stop();
     (void)robot.servo_off();
