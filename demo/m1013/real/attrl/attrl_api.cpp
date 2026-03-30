@@ -5,9 +5,9 @@
 #include <atomic>
 #include <vector>
 #include <Eigen/Dense>
-#include "../../../rt_control/rt_robot.hpp" 
+#include "../../../rt_control/dsr/dsr_robot.hpp" 
 
-using namespace rt_control;
+using namespace dsr_control;
 
 // 전역 변수 및 시그널 핸들러 (Ctrl+C 종료용)
 std::atomic<bool> keep_running(true);

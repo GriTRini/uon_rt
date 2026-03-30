@@ -7,9 +7,9 @@
 #include <csignal>
 #include <atomic>
 #include <string>
-#include "../../../rt_control/rt_robot.hpp" 
+#include "../../../rt_control/dsr/dsr_robot.hpp" 
 
-using namespace rt_control;
+using namespace dsr_control;
 
 std::atomic<bool> keep_running(true);
 void sigint_handler(int signum) { keep_running = false; }

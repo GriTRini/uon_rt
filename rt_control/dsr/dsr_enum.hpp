@@ -5,7 +5,7 @@
 
 #pragma once
 
-namespace rt_control {
+namespace dsr_control {
 
 enum class OpenConnError {
     NO_ERROR,

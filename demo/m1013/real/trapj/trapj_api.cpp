@@ -9,9 +9,9 @@
 #include <csignal>   // 🌟 시그널 처리를 위해 추가
 #include <atomic>    // 🌟 안전한 상태 플래그를 위해 추가
 #include <Eigen/Dense>
-#include "../../../rt_control/rt_robot.hpp" 
+#include "../../../rt_control/dsr/dsr_robot.hpp" 
 
-using namespace rt_control;
+using namespace dsr_control;
 
 // 🌟 강제 종료(Ctrl+C) 감지용 전역 플래그
 std::atomic<bool> keep_running(true);

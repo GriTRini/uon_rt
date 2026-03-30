@@ -3,7 +3,7 @@
 #include <chrono>
 #include <string>
 
-namespace rt_control {
+namespace dsr_control {
     struct LogAlarm {
         std::chrono::system_clock::time_point time;
         int level;

@@ -16,20 +16,20 @@
 #include "timer.hpp"
 #include "../drfl/include/DRFLEx.h"
 
-#include "rt_data.hpp"
-#include "rt_enum.hpp"
-#include "model/model.hpp"
-#include "trajectory/trajectory_generator.hpp"
+#include "dsr_data.hpp"
+#include "dsr_enum.hpp"
+#include "../model/model.hpp"
+#include "../trajectory/trajectory_generator.hpp"
 
-namespace rt_control {
+namespace dsr_control {
 
 namespace draf = DRAFramework;
 
 template <size_t ID = 0> class Robot {
   public:
     using traj_gen_t = trajectory::TrajGenerator;
-    using angles_t = rt_control::angles_t;
-    using value_t = rt_control::value_t;
+    using angles_t = dsr_control::angles_t;
+    using value_t = dsr_control::value_t;
     using tmat_t = Eigen::Isometry3d;
     
     using jmat_t = Eigen::Matrix<double, 6, 6>;
