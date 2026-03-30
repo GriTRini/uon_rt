@@ -22,8 +22,8 @@ int main() {
     const std::string robot_ip = "192.168.1.30";
     
     // [설정] TCP 오프셋 (길고 복잡하게 꺾인 툴)
-    const double tx = -0.22, ty = -0.22, tz = 0.3;
-    const double tr = 60.0, tp = 0.0, tyw = -45.0;
+    const double tx = 0.0, ty = -0.17239, tz = 0.26611;
+    const double tr = -120.0, tp = 0.0, tyw = -45.0;
 
     // [파일] 데이터 로깅용 CSV
     std::ofstream csv("tcp_interactive_test_log.csv");
