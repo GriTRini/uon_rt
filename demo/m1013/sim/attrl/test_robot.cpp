@@ -10,19 +10,18 @@
 using namespace rt_control;
 
 int main() {
-    // 1. 모델 및 제너레이터 초기화
+    // 1. 모델 및 제너레이터 초기화 (m1013)
     model::RobotModel model("m1013");
     trajectory::TrajGenerator traj_gen;
     
-    // 🌟 TCP 설정 제거 완료
-    
+    // TCP 설정 제거 완료
     angles_t q_init = angles_t::Zero();
     traj_gen.initialize(model, q_init, angles_t::Zero(), angles_t::Zero());
 
     double dt = 0.001; 
     std::ofstream csv("flange_fig8_sim_data.csv");
     
-    // 🌟 CSV 헤더에서 TCP 오프셋 부분 제거
+    // CSV 헤더에서 TCP 오프셋 부분 제거
     csv << "Scenario,Time,J1,J2,J3,J4,J5,J6,"
         << "Target_X,Target_Y,Target_Z\n";
 
@@ -38,7 +37,7 @@ int main() {
         csv << current_goal.translation().x() << "," << current_goal.translation().y() << "," << current_goal.translation().z() << "\n";
     };
 
-    // --- STEP 1: 시작 지점으로 이동 (기존과 동일) ---
+    // --- STEP 1: 시작 지점으로 이동 ---
     angles_t q_start_pos;
     q_start_pos << 0.0, 0.0, -90.0, 0.0, -90.0, 0.0;
     current_goal = traj_gen.solve_forward(q_start_pos);
@@ -55,7 +54,6 @@ int main() {
     // --- STEP 2: 극한/반전 궤적 (Step Response & Limit Test) ---
     std::cout << "[Step 2] 극한/반전 궤적 추종 시작 (목표 순간이동)..." << std::endl;
     
-    // 타겟 웨이포인트 정의: { X, Y, Z }, { Roll, Pitch, Yaw (도 단위) }, "시나리오 이름"
     struct Waypoint {
         Eigen::Vector3d pos;
         Eigen::Vector3d rpy_deg;
@@ -64,16 +62,9 @@ int main() {
 
     // 로봇을 극한으로 몰아붙이는 4개의 극단적 웨이포인트
     std::vector<Waypoint> extreme_waypoints = {
-        // 1. 우측 멀리 뻗으면서 바닥을 향함 (완전한 스트레칭)
         {{0.7, -0.5, 0.2}, {180.0, 0.0, 0.0}, "Far_Right_Down"},
-        
-        // 2. 좌측 멀리, 위를 향함 (급격한 대각선 횡이동 및 자세 180도 뒤집기)
         {{0.5,  0.6, 0.8}, {0.0, -45.0, 90.0}, "Far_Left_Up"},
-        
-        // 3. 로봇 완전 뒤편 (Base Joint(J1)의 180도 급회전 유도)
         {{-0.5, 0.0, 0.5}, {0.0, 90.0, 180.0}, "Opposite_Behind"},
-        
-        // 4. 로봇 베이스 바로 위쪽 (특이점/Singularity 부근 및 조인트 접힘 한계 테스트)
         {{0.1,  0.0, 0.95}, {0.0, 180.0, 0.0}, "High_Close_Inverted"}
     };
 
@@ -81,7 +72,6 @@ int main() {
         Eigen::Isometry3d target_pose = Eigen::Isometry3d::Identity();
         target_pose.translation() = wp.pos;
         
-        // Euler Angles (RPY) -> Rotation Matrix 변환
         Eigen::AngleAxisd roll(wp.rpy_deg.x() * M_PI / 180.0, Eigen::Vector3d::UnitX());
         Eigen::AngleAxisd pitch(wp.rpy_deg.y() * M_PI / 180.0, Eigen::Vector3d::UnitY());
         Eigen::AngleAxisd yaw(wp.rpy_deg.z() * M_PI / 180.0, Eigen::Vector3d::UnitZ());
@@ -90,14 +80,12 @@ int main() {
         current_goal = target_pose;
         std::cout << "   -> Target 순간이동: " << wp.name << std::endl;
         
-        // Attractor에 새로운 타겟 하달
         if (!traj_gen.attrl(target_pose, 100.0)) {
             std::cerr << "궤적 생성 실패!" << std::endl;
             continue;
         }
         
-        // 🌟 타겟 도달 여부와 상관없이 각 웨이포인트마다 4초씩 시간을 줌
-        // 로봇이 최대 속도로 쫓아가는 모습(Transient Response)을 관찰하기 위함
+        // 4초간 최대 속도로 쫓아가는 모습 관찰
         double step_time = 0.0;
         while (step_time < 4.0) {
             traj_gen.update(dt);

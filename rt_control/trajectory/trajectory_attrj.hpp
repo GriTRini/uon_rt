@@ -42,20 +42,25 @@ class TrajAttrJ {
         angles_t q_err = m_goal_angles - m_angles;
         angles_t dq_err = m_goal_angvels - m_angvels;
         
-        // 조인트별 독립 제어
         angles_t target_ddq = m_kp.cwiseProduct(q_err) + m_kd.cwiseProduct(dq_err);
         
         // 2. 가속도 제한 (Saturation)
         m_angaccs = target_ddq.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
         
-        // 3. 적분 및 속도 제한
-        m_angvels += m_angaccs * dt;
-        m_angvels = m_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
+        // 3. 임시 속도 계산 및 클램핑
+        angles_t next_angvels = m_angvels + m_angaccs * dt;
+        angles_t clamped_angvels = next_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
         
-        // 4. 위치 업데이트
-        m_angles += m_angvels * dt;
+        // 🌟 핵심 개선 1: 속도가 클램핑되었다면, 실제 적용 가능한 가속도로 역산하여 동기화
+        m_angaccs = (clamped_angvels - m_angvels) / dt;
+        
+        // 🌟 핵심 개선 2: 정확한 등가속도 운동 공식을 사용한 위치 적분 (x = x0 + v0*t + 0.5*a*t^2)
+        m_angles += (m_angvels * dt) + (0.5 * m_angaccs * dt * dt);
+        
+        // 4. 최종 속도 업데이트
+        m_angvels = clamped_angvels;
 
-        update_clip();
+        update_clip(); // 위치 클램핑
         return true;
     }
 
