@@ -12,12 +12,14 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <optional>
 
 #include "timer.hpp"
 #include "../drfl/include/DRFLEx.h"
 
 #include "dsr_data.hpp"
 #include "dsr_enum.hpp"
+#include "../core/core.hpp" // 🌟 핵심 타입(angles_t, value_t)이 정의된 헤더 추가
 #include "../model/model.hpp"
 #include "../trajectory/trajectory_generator.hpp"
 
@@ -27,14 +29,14 @@ namespace draf = DRAFramework;
 
 template <size_t ID = 0> class Robot {
   public:
-    using traj_gen_t = trajectory::TrajGenerator;
-    using angles_t = dsr_control::angles_t;
-    using value_t = dsr_control::value_t;
+    // 🌟 에러의 원인 해결: 모든 타입 앞에 rt_control:: 을 정확히 명시합니다.
+    using traj_gen_t = rt_control::trajectory::TrajGenerator;
+    using angles_t = rt_control::angles_t;
+    using value_t = rt_control::value_t;
     using tmat_t = Eigen::Isometry3d;
     
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
-    // using angles_set_t = trajectory::TrajGenerator::angles_set_t;
 
   public:
     constexpr static size_t id = ID;
@@ -50,7 +52,7 @@ template <size_t ID = 0> class Robot {
           m_is_rt_control_ready(false), 
           m_servoj_target_time(0.01f)
     {
-        // TrajGenerator 초기화 (Zero 상태로 시작)
+        // TrajGenerator 초기화
         m_traj_gen.initialize(m_model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
         m_robot_instance = this;
     }
@@ -331,8 +333,11 @@ template <size_t ID = 0> class Robot {
         return Eigen::Map<const Eigen::Matrix<float, 6, 1>>(pData).cast<double>();
     }
 
-    void set_digital_output(GPIO_CTRLBOX_DIGITAL_INDEX index, bool value) {
-        if (m_control) draf::_set_digital_output(m_control, index, value);
+    void set_digital_output(int index, bool value) {
+        if (m_control) {
+            // 사용자가 입력한 일반 정수(index)를 두산 SDK의 Enum 타입으로 변환하여 명령 하달
+            draf::_set_digital_output(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index), value);
+        }
     }
 
   private:
