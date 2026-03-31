@@ -196,6 +196,13 @@ template <size_t ID = 0> class Robot {
         return CloseConnError::NO_ERROR;
     }
 
+    [[nodiscard]] std::optional<ROBOT_STATE> get_robot_state() const noexcept {
+        if (!m_control) {
+            return std::nullopt;
+        }
+        return draf::_get_robot_state(m_control);
+    }
+
     // ==============================================================
     // 🌟 [핵심] 실시간 기구학 및 TCP 정보 인터페이스
     // ==============================================================
