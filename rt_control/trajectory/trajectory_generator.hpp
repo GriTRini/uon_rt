@@ -161,6 +161,9 @@ class TrajGenerator {
         return true;
     }
 
+    // ---------------------------------------------------------------------
+    // 기존 함수 1: 행렬(tmat_t)을 직접 받는 attrl
+    // ---------------------------------------------------------------------
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &kp = 50.0) noexcept {
         m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
         m_gen_attrl.set_goal_pose(goal_tmat);
@@ -169,6 +172,37 @@ class TrajGenerator {
         return true;
     }
 
+    // ---------------------------------------------------------------------
+    // 🌟 추가된 함수 2: x, y, z (m) 와 r, p, yaw (deg) 를 받는 attrl
+    // ---------------------------------------------------------------------
+    [[nodiscard]] bool attrl(const value_t x, const value_t y, const value_t z, 
+                             const value_t r_deg, const value_t p_deg, const value_t yaw_deg, 
+                             const value_t kp = 50.0) noexcept {
+        
+        // 1. Degree 단위로 들어온 각도를 Radian으로 변환
+        double r_rad = r_deg * M_PI / 180.0;
+        double p_rad = p_deg * M_PI / 180.0;
+        double y_rad = yaw_deg * M_PI / 180.0;
+
+        // 2. 깨끗한 4x4 단위 행렬(Identity) 생성
+        tmat_t goal_tmat = tmat_t::Identity();
+
+        // 3. 절대 회전 적용 (Z -> Y -> X 순서로 곱연산)
+        goal_tmat.linear() = (Eigen::AngleAxisd(y_rad, Eigen::Vector3d::UnitZ()) *
+                              Eigen::AngleAxisd(p_rad, Eigen::Vector3d::UnitY()) *
+                              Eigen::AngleAxisd(r_rad, Eigen::Vector3d::UnitX())).matrix();
+
+        // 4. 절대 위치 적용
+        goal_tmat.translation() << x, y, z;
+
+        // 5. 계산된 행렬을 바탕으로 TrajAttrL 제어기 초기화
+        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
+        m_gen_attrl.set_goal_pose(goal_tmat);
+        m_gen_attrl.set_kp(kp);
+        m_traj_state = traj_state_t::ATTRL;
+        return true;
+    }
+    
     // 🌟 1. 바닥(-Z) 방향으로 TCP 정렬 (손목 위치 고정 방식)
     [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, const value_t &kp = 100.0) noexcept {
         // 1. 현재 손목(Flange) 포즈 역산

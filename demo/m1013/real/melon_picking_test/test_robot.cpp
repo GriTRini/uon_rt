@@ -51,7 +51,6 @@ int main() {
             bool reached = robot.get_goal_reached(std::nullopt, p_th, r_th);
             auto cur_q = robot.get_current_angles();
             
-            // 현재 관절 각도를 이용해 실제 TCP 포즈(Forward Kinematics) 계산
             std::optional<Eigen::Isometry3d> cur_tcp_opt = std::nullopt;
             if (cur_q) {
                 cur_tcp_opt = robot.solve_forward(*cur_q);
@@ -65,7 +64,6 @@ int main() {
                 csv << cur_tcp.translation().x() << "," << cur_tcp.translation().y() << "," << cur_tcp.translation().z() << "\n";
             }
 
-            // 터미널 디버그 출력
             if (loop_count % 500 == 0) {
                 Robot<0>::angles_t print_q = cur_q ? *cur_q : Robot<0>::angles_t::Zero(); 
                 std::cout << std::fixed << std::setprecision(4)
@@ -73,13 +71,11 @@ int main() {
                           << " | J: [" << print_q.transpose() << "]" << std::endl;
             }
 
-            // 도달 체크
             if (reached) {
                 std::cout << "      ✅ " << info << " 완료\n" << std::endl;
                 return true;
             }
             
-            // 타임아웃 체크
             if ((total_time - start_time) >= timeout_sec) {
                 std::cout << "      ⚠️ " << info << " 타임아웃 발생\n" << std::endl;
                 return false;
@@ -93,10 +89,11 @@ int main() {
     };
 
     // =========================================================================
-    // 🌟 모듈 2: 동작 실행 래퍼
+    // 🌟 모듈 2: 동작 실행 래퍼 (행렬 대신 X,Y,Z,R,P,Y 직접 입력)
     // =========================================================================
-    auto execute_move = [&](const Eigen::Isometry3d& target_pose, const std::string& step_info) -> bool {
-        if (!robot.attrl(target_pose, 150.0)) return false;
+    auto execute_move = [&](double x, double y, double z, double r, double p, double yaw, const std::string& step_info) -> bool {
+        // 💡 Kp 값을 150.0에서 50.0으로 고정하여 과가속 발산 방지!
+        if (!robot.attrl(x, y, z, r, p, yaw, 150.0)) return false;
         return wait_goal(step_info, 0.01, 1.0, 100.0);
     };
 
@@ -123,7 +120,8 @@ int main() {
         if (robot.trapj(q_pose)) wait_goal("2_Setup_TrapJ");
 
         std::cout << "\n3️⃣ [Align] 툴 팁을 바닥(-Z) 방향으로 정렬합니다..." << std::endl;
-        if (robot.align_tcp_to_floor(180.0, 200.0)) {
+        // 💡 특이점(Singularity) 회피를 위해 Yaw 각도를 180도가 아닌 90도로 정렬
+        if (robot.align_tcp_to_floor(90.0, 100.0)) {
             wait_goal("3_Align_Vertical_Fixed_Flange", 0.01, 0.5, 100.0);
         }
 
@@ -133,6 +131,11 @@ int main() {
         std::cout << "▶ 종료하려면 'q'를 입력하세요." << std::endl;
         std::cout << "==========================================================\n" << std::endl;
         
+        // 🌟 절대 자세 설정: 툴 끝이 바닥을 보게 하되, 특이점 회피를 위해 Yaw를 90도로 세팅
+        const double target_r = 180.0;
+        const double target_p = 0.0;
+        const double target_yaw = 90.0;
+
         while (keep_running) {
             // ---------------------------------------------------------
             // [Phase 1] PICK (집기) 파트
@@ -141,10 +144,7 @@ int main() {
             std::string input_x;
             std::cin >> input_x;
 
-            if (input_x == "q" || input_x == "Q") {
-                std::cout << "프로그램을 종료합니다." << std::endl;
-                break;
-            }
+            if (input_x == "q" || input_x == "Q") break;
 
             double pick_x, pick_y, pick_z;
             try {
@@ -156,25 +156,15 @@ int main() {
                 continue;
             }
 
-            // 현재 회전(자세) 정보 획득
-            Eigen::Isometry3d base_target;
-            auto cur_q = robot.get_current_angles();
-            if (cur_q) base_target = robot.solve_forward(*cur_q);
-            else base_target = robot.get_current_pos(); 
-
             std::cout << "\n   🚀 [Pick 시퀀스 시작] 목표: [" << pick_x << ", " << pick_y << ", " << pick_z << "]" << std::endl;
 
             // 1. Pick 접근 (Z + 0.05m)
-            Eigen::Isometry3d step1_target = base_target;
-            step1_target.translation() << pick_x, pick_y, pick_z + 0.05;
             std::cout << "\n   ▶ [Step 1] Pick 상단 5cm 위치로 접근 중..." << std::endl;
-            if (!execute_move(step1_target, "Pick_Approach")) continue;
+            if (!execute_move(pick_x, pick_y, pick_z + 0.05, target_r, target_p, target_yaw, "Pick_Approach")) continue;
 
             // 2. Pick 하강 (Z)
-            Eigen::Isometry3d step2_target = base_target;
-            step2_target.translation() << pick_x, pick_y, pick_z;
             std::cout << "\n   ▶ [Step 2] Pick 지점으로 수직 하강 중..." << std::endl;
-            if (!execute_move(step2_target, "Pick_Reach")) continue;
+            if (!execute_move(pick_x, pick_y, pick_z, target_r, target_p, target_yaw, "Pick_Reach")) continue;
 
             // 💡 [I/O ON] 물건 잡기
             std::cout << "\n   🧲 [I/O 제어] 그리퍼 작동 (ON)" << std::endl;
@@ -182,10 +172,8 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 흡착 대기
 
             // 3. Pick 상승 (Z + 0.10m)
-            Eigen::Isometry3d step3_target = base_target;
-            step3_target.translation() << pick_x, pick_y, pick_z + 0.10;
             std::cout << "\n   ▶ [Step 3] 10cm 위로 수직 상승 중..." << std::endl;
-            if (!execute_move(step3_target, "Pick_Retract")) continue;
+            if (!execute_move(pick_x, pick_y, pick_z + 0.10, target_r, target_p, target_yaw, "Pick_Retract")) continue;
 
 
             // ---------------------------------------------------------
@@ -194,10 +182,7 @@ int main() {
             std::cout << "\n>> 🟦 [PLACE] 놓으러 갈 좌표 X Y Z 입력 (또는 q): ";
             std::cin >> input_x;
 
-            if (input_x == "q" || input_x == "Q") {
-                std::cout << "프로그램을 종료합니다." << std::endl;
-                break;
-            }
+            if (input_x == "q" || input_x == "Q") break;
 
             double place_x, place_y, place_z;
             try {
@@ -209,24 +194,15 @@ int main() {
                 continue;
             }
 
-            // 현재 회전(자세) 정보 다시 갱신 (안전성을 위해)
-            cur_q = robot.get_current_angles();
-            if (cur_q) base_target = robot.solve_forward(*cur_q);
-            else base_target = robot.get_current_pos(); 
-
             std::cout << "\n   🚀 [Place 시퀀스 시작] 목표: [" << place_x << ", " << place_y << ", " << place_z << "]" << std::endl;
 
             // 4. Place 접근 (Z + 0.05m)
-            Eigen::Isometry3d step4_target = base_target;
-            step4_target.translation() << place_x, place_y, place_z + 0.05;
             std::cout << "\n   ▶ [Step 4] Place 상단 5cm 위치로 접근 중..." << std::endl;
-            if (!execute_move(step4_target, "Place_Approach")) continue;
+            if (!execute_move(place_x, place_y, place_z + 0.05, target_r, target_p, target_yaw, "Place_Approach")) continue;
 
             // 5. Place 하강 (Z)
-            Eigen::Isometry3d step5_target = base_target;
-            step5_target.translation() << place_x, place_y, place_z;
             std::cout << "\n   ▶ [Step 5] Place 지점으로 수직 하강 중..." << std::endl;
-            if (!execute_move(step5_target, "Place_Reach")) continue;
+            if (!execute_move(place_x, place_y, place_z, target_r, target_p, target_yaw, "Place_Reach")) continue;
 
             // 💡 [I/O OFF] 물건 놓기
             std::cout << "\n   👐 [I/O 제어] 그리퍼 해제 (OFF)" << std::endl;
@@ -234,10 +210,8 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 떨어질 때까지 대기
 
             // 6. Place 상승 (Z + 0.10m)
-            Eigen::Isometry3d step6_target = base_target;
-            step6_target.translation() << place_x, place_y, place_z + 0.10;
             std::cout << "\n   ▶ [Step 6] 10cm 위로 수직 상승 중..." << std::endl;
-            if (!execute_move(step6_target, "Place_Retract")) continue;
+            if (!execute_move(place_x, place_y, place_z + 0.10, target_r, target_p, target_yaw, "Place_Retract")) continue;
 
             std::cout << "\n   🎉 1회 Pick & Place 완료!" << std::endl;
         }

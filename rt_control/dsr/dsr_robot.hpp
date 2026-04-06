@@ -251,10 +251,27 @@ template <size_t ID = 0> class Robot {
         return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()));
     }
 
-    /** @brief attrl (절대 좌표 Pose 이동) */
+    /** @brief attrl (행렬 기반 절대 좌표 Pose 이동) */
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.attrl(goal_tmat, kp);
+    }
+
+    // ---------------------------------------------------------------------
+    // 🌟 새로 추가/수정할 부분: x, y, z, r, p, y 값을 직접 받는 attrl
+    // ---------------------------------------------------------------------
+    /** * @brief attrl (좌표 및 오일러 각도 기반 절대 Pose 이동)
+     * @param x, y, z : 절대 목표 위치 [m]
+     * @param r_deg, p_deg, yaw_deg : 절대 목표 회전 (Roll, Pitch, Yaw) [deg]
+     * @param kp : 제어 게인 (기본값 50.0)
+     */
+    [[nodiscard]] bool attrl(const value_t x, const value_t y, const value_t z, 
+                             const value_t r_deg, const value_t p_deg, const value_t yaw_deg, 
+                             const value_t kp = 50.0) noexcept {
+        if (!m_update_timer.is_running()) return false;
+        
+        // 제너레이터(m_traj_gen)에 방금 추가했던 x, y, z, r, p, yaw 입력용 attrl 함수를 호출
+        return m_traj_gen.attrl(x, y, z, r_deg, p_deg, yaw_deg, kp);
     }
 
     // -----------------------------------------------------------
