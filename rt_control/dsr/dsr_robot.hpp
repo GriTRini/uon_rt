@@ -14,8 +14,8 @@
 #include <atomic>
 #include <optional>
 
-#include "timer.hpp"
-#include "../drfl/include/DRFLEx.h"
+#include "../timer.hpp"
+#include "../../drfl/include/DRFLEx.h"
 
 #include "dsr_data.hpp"
 #include "dsr_enum.hpp"
@@ -336,7 +336,7 @@ template <size_t ID = 0> class Robot {
     void set_digital_output(int index, bool value) {
         if (m_control) {
             // 사용자가 입력한 일반 정수(index)를 두산 SDK의 Enum 타입으로 변환하여 명령 하달
-            draf::_set_digital_output(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index), value);
+            draf::_set_digital_output(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index-1), value);
         }
     }
 
