@@ -263,6 +263,7 @@ class TrajGenerator {
     [[nodiscard]] const a_t& a() const noexcept { return m_a; }
     [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
     [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
+    [[nodiscard]] tmat_t flange_tmat() const noexcept { return m_tmat * m_tcp_offset.inverse(); }
     [[nodiscard]] constexpr bool goal_reached(
         const std::optional<value_t> &angles_enorm_thold = 2.0,
         const std::optional<value_t> &pos_enorm_thold = 0.002,
