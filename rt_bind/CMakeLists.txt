@@ -4,8 +4,12 @@ project(uon_rt_control)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# [추가] 정적 라이브러리(.a)를 동적 라이브러리(.so)에 녹일 때 필수적인 옵션입니다.
+# [중요] 정적 라이브러리(.a)를 동적 라이브러리(.so)에 녹일 때 필수적인 옵션입니다.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(POLICY CMP0148)
+    cmake_policy(SET CMP0148 OLD)
+endif()
 
 # 1. 의존성 패키지
 find_package(pybind11 REQUIRED)
@@ -15,6 +19,7 @@ find_package(Eigen3 REQUIRED)
 set(ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(DSR_ROOT "${ROOT_DIR}/drfl")
 set(DSR_INC_DIR "${DSR_ROOT}/include")
+# Ubuntu 24.04 amd64 기준 경로
 set(DSR_LIB_DIR "${DSR_ROOT}/library/Linux/64bits/amd64/24.04")
 
 # 3. 인클루드
@@ -36,11 +41,13 @@ target_link_directories(uon_rt PRIVATE
 
 # 6. 라이브러리 링크 (정적 + 동적 혼합)
 target_link_libraries(uon_rt PRIVATE
-    "${DSR_LIB_DIR}/libDRFL.a"   # 🌟 파일 경로 직접 지정 -> uon_rt.so 안에 완전히 녹아 들어감
-    PocoFoundation               # 🌟 이름만 지정 -> 리눅스 시스템의 libPocoFoundation.so를 사용
-    PocoNet                      # 🌟 이름만 지정 -> 리눅스 시스템의 libPocoNet.so를 사용
+    "${DSR_LIB_DIR}/libDRFL.a"   # 🌟 정적 링크: 파일 경로 직접 지정 -> uon_rt.so 안에 완전히 녹아 들어감
+    PocoFoundation               # 🌟 동적 링크: 이름만 지정 -> 리눅스 시스템에 설치된 libPocoFoundation.so 참조
+    PocoNet                      # 🌟 동적 링크: 이름만 지정 -> 리눅스 시스템에 설치된 libPocoNet.so 참조
     pthread
     dl
 )
 
-# (CMAKE_POSITION_INDEPENDENT_CODE를 설정했으므로 -fPIC는 생략해도 무방합니다)
+# 7. 파이썬 모듈 이름 깔끔하게 정리
+# (uon_rt.cpython-312-x86_64-linux-gnu.so -> uon_rt.so 로 강제 고정)
+set_target_properties(uon_rt PROPERTIES SUFFIX ".so")

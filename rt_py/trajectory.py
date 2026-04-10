@@ -18,14 +18,19 @@ class TrajGenerator(_uon.TrajGenerator):
     def __init__(self) -> None:
         super().__init__()
 
+    # 🌟 수정된 부분: 첫 번째 인자를 robot_model 객체 대신 model_name(문자열)으로 받습니다.
     def initialize(
         self,
-        robot_model: _uon.RobotModel,
+        model_name: str,
         start_angles: npt.NDArray[np.float64],
         start_angvels: npt.NDArray[np.float64],
         start_angaccs: npt.NDArray[np.float64],
     ) -> None:
-        super().initialize(robot_model, start_angles, start_angvels, start_angaccs)
+        # 1. 넘겨받은 문자열("m1013" 등)을 이용해 내부적으로 C++ RobotModel 객체를 생성합니다.
+        c_model = _uon.RobotModel(model_name)
+        
+        # 2. 생성된 객체를 C++ 부모 클래스(super)의 initialize로 넘겨줍니다.
+        super().initialize(c_model, start_angles, start_angvels, start_angaccs)
 
     def update(self, dt: float) -> None:
         super().update(dt)

@@ -36,8 +36,12 @@ PYBIND11_MODULE(uon_rt, m) {
         .def("initialize", &TrajGenerator::initialize)
         .def("update", &TrajGenerator::update, py::arg("dt"))
         
-        // TCP 제어
-        .def("set_tcp_tmat", &TrajGenerator::set_tcp_tmat)
+        // 🌟 수정: Isometry3d 입력을 Matrix4d로 받아서 변환
+        .def("set_tcp_tmat", [](TrajGenerator& self, const Eigen::Matrix4d& mat) {
+            Eigen::Isometry3d iso;
+            iso.matrix() = mat;
+            self.set_tcp_tmat(iso);
+        })
         .def("set_tcp", &TrajGenerator::set_tcp, 
              py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r_deg"), py::arg("p_deg"), py::arg("yaw_deg"))
         
@@ -45,9 +49,12 @@ PYBIND11_MODULE(uon_rt, m) {
         .def("stop", &TrajGenerator::stop)
         .def("trapj", &TrajGenerator::trapj, py::arg("goal_angles"), py::arg("goal_angvels") = angles_t::Zero())
         
-        // attrl 오버로딩 처리
-        .def("attrl", py::overload_cast<const Eigen::Isometry3d&, const value_t&>(&TrajGenerator::attrl), 
-             py::arg("goal_tmat"), py::arg("kp") = 50.0)
+        // 🌟 수정: Isometry3d 입력을 Matrix4d로 받아서 변환
+        .def("attrl", [](TrajGenerator& self, const Eigen::Matrix4d& mat, value_t kp) {
+            Eigen::Isometry3d iso;
+            iso.matrix() = mat;
+            return self.attrl(iso, kp);
+        }, py::arg("goal_tmat"), py::arg("kp") = 50.0)
         .def("attrl", py::overload_cast<value_t, value_t, value_t, value_t, value_t, value_t, value_t>(&TrajGenerator::attrl),
              py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r_deg"), py::arg("p_deg"), py::arg("yaw_deg"), py::arg("kp") = 50.0)
         
@@ -61,15 +68,24 @@ PYBIND11_MODULE(uon_rt, m) {
         .def("angaccs", &TrajGenerator::angaccs)
         .def("jmat", &TrajGenerator::jmat)
         .def("a", &TrajGenerator::a)
-        .def("tmat", &TrajGenerator::tmat)
-        .def("flange_tmat", &TrajGenerator::flange_tmat)
+        
+        // 🌟 수정: Isometry3d 출력을 Matrix4d로 변환하여 리턴
+        .def("tmat", [](const TrajGenerator& self) -> Eigen::Matrix4d { return self.tmat().matrix(); })
+        .def("flange_tmat", [](const TrajGenerator& self) -> Eigen::Matrix4d { return self.flange_tmat().matrix(); })
         
         // 오차 및 목표 확인
         .def("angles_enorm", &TrajGenerator::angles_enorm)
         .def("pos_enorm", &TrajGenerator::pos_enorm)
         .def("rot_enorm", &TrajGenerator::rot_enorm)
         .def("goal_angles", &TrajGenerator::goal_angles)
-        .def("goal_tmat", &TrajGenerator::goal_tmat)
+        
+        // 🌟 수정: optional<Isometry3d> 처리
+        .def("goal_tmat", [](const TrajGenerator& self) -> std::optional<Eigen::Matrix4d> {
+            auto res = self.goal_tmat();
+            if (res) return res->matrix();
+            return std::nullopt;
+        })
+        
         .def("goal_reached", &TrajGenerator::goal_reached, 
              py::arg("angles_enorm_thold") = 2.0, 
              py::arg("pos_enorm_thold") = 0.002, 
@@ -78,7 +94,10 @@ PYBIND11_MODULE(uon_rt, m) {
              py::arg("vel_enorm_thold") = 0.004, 
              py::arg("w_enorm_thold") = 6.0)
         
-        .def("solve_forward", &TrajGenerator::solve_forward);
+        // 🌟 수정: 리턴값 변환
+        .def("solve_forward", [](const TrajGenerator& self, const angles_t& q) -> Eigen::Matrix4d {
+            return self.solve_forward(q).matrix();
+        });
 
     // ==============================================================
     // 3. RobotBase (모든 인터페이스 노출)
@@ -86,16 +105,25 @@ PYBIND11_MODULE(uon_rt, m) {
     py::class_<RobotBase, std::unique_ptr<RobotBase>>(m, "RobotBase")
         // 수학 및 기구학 API
         .def("set_tcp", &RobotBase::set_tcp)
-        .def("get_current_pos", &RobotBase::get_current_pos)
-        .def("get_current_flange_pos", &RobotBase::get_current_flange_pos)
+        
+        // 🌟 수정: Isometry3d 출력 처리
+        .def("get_current_pos", [](const RobotBase& self) -> Eigen::Matrix4d { return self.get_current_pos().matrix(); })
+        .def("get_current_flange_pos", [](const RobotBase& self) -> Eigen::Matrix4d { return self.get_current_flange_pos().matrix(); })
         .def("get_jacobian", &RobotBase::get_jacobian)
         .def("get_task_vel", &RobotBase::get_task_vel)
-        .def("solve_forward", &RobotBase::solve_forward)
+        .def("solve_forward", [](const RobotBase& self, const angles_t& q) -> Eigen::Matrix4d { return self.solve_forward(q).matrix(); })
 
         // 궤적 제어 API
         .def("stop", &RobotBase::stop)
         .def("trapj", &RobotBase::trapj, py::arg("goal_angles"), py::arg("goal_angvels") = std::nullopt)
-        .def("attrl", py::overload_cast<const Eigen::Isometry3d&, value_t>(&RobotBase::attrl), py::arg("goal_tmat"), py::arg("kp") = 50.0)
+        
+        // 🌟 수정: Isometry3d 입력 처리
+        .def("attrl", [](RobotBase& self, const Eigen::Matrix4d& mat, value_t kp) {
+            Eigen::Isometry3d iso;
+            iso.matrix() = mat;
+            return self.attrl(iso, kp);
+        }, py::arg("goal_tmat"), py::arg("kp") = 50.0)
+        
         .def("attrl", py::overload_cast<value_t, value_t, value_t, value_t, value_t, value_t, value_t>(&RobotBase::attrl),
              py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r_deg"), py::arg("p_deg"), py::arg("yaw_deg"), py::arg("kp") = 50.0)
         .def("align_tcp_to_floor", &RobotBase::align_tcp_to_floor, py::arg("yaw_deg") = 0.0, py::arg("kp") = 100.0)

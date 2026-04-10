@@ -12,10 +12,6 @@ __all__ = [
 ]
 
 class Robot:
-    """
-    C++ RobotBase 인터페이스를 파이썬에서 사용하기 위한 래퍼 클래스입니다.
-    """
-
     def __init__(self, model_name: str) -> None:
         # C++ RobotFactory를 통해 실제 로봇 객체 생성 및 바인딩
         self._arm = _uon.RobotFactory.create(model_name)
