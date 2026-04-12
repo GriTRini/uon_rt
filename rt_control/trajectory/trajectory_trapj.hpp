@@ -25,7 +25,7 @@ public:
     TrajTrapJ() : m_valid(false) {}
 
     // DSR 인터페이스에 맞춘 생성자
-    TrajTrapJ(const model::RobotModel* model, // 모델 포인터 사용 (필요시 모델 한계치 참조)
+    TrajTrapJ([[maybe_unused]]const model::RobotModel* model, // 모델 포인터 사용 (필요시 모델 한계치 참조)
               const angles_t& q_start, const angles_t& dq_start,
               const angles_t& q_goal, const angles_t& dq_goal,
               const angles_t& peak_v, const angles_t& peak_a,

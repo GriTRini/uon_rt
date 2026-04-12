@@ -1,47 +1,39 @@
-cmake_minimum_required(VERSION 3.15)
-project(UonRtControl)
+cmake_minimum_required(VERSION 3.12)
+project(uon_rt_binding)
 
-# C++20 표준 강제 적용
+# 1. C++ 표준 설정 (std::optional, std::chrono 등을 위해 C++17 필요)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# CMake 경고(CMP0148) 해결: 구형 파이썬 검색 정책 유지
-if(POLICY CMP0148)
-    cmake_policy(SET CMP0148 OLD)
-endif()
-
-# Pybind11 및 Eigen3 패키지 찾기
+# 2. 필수 패키지 찾기 (Python & pybind11)
 find_package(pybind11 REQUIRED)
+
+# 3. Eigen3 찾기 (로봇 연산의 핵심)
+# 시스템에 설치되어 있다면 아래 명령으로 찾습니다.
 find_package(Eigen3 REQUIRED)
 
-# ==============================================================================
-# 🐍 Python Binding (Pybind11) 빌드 설정
-# ==============================================================================
-
-# 1. 모듈 이름 정의
-pybind11_add_module(dsr_rt_control rt_control_bind/dsr_robot.cpp)
-
-# 🌟 2. 핵심: 파이썬 버전 꼬리표를 떼어내고 무조건 ".so"로 강제 고정!
-set_target_properties(dsr_rt_control PROPERTIES SUFFIX ".so")
-
-# 3. 헤더 인클루드 경로 설정
-target_include_directories(dsr_rt_control PRIVATE 
-    ${CMAKE_SOURCE_DIR}/rt_control
-    ${CMAKE_SOURCE_DIR}/drfl/include
-    /usr/include/eigen3
+# 4. 헤더 경로 설정
+include_directories(
+    ${PROJECT_SOURCE_DIR}              # /home/uon/uon_rt (rt_control 헤더 참조용)
+    ${EIGEN3_INCLUDE_DIRS}             # Eigen3 헤더
 )
 
-# 4. 기존 DRFL 라이브러리 링크 디렉토리
-target_link_directories(dsr_rt_control PRIVATE 
-    ${CMAKE_SOURCE_DIR}/drfl/library/Linux/64bits/amd64/24.04
+# 5. 파이썬 모듈 빌드
+# 모듈 이름은 'rt_control_cpp_impl'로 설정 (rt_py/__init__.py에서 import할 이름)
+pybind11_add_module(rt_control_cpp_impl
+    rt_bind/rt_bind.cpp
+    # 만약 다른 .cpp 파일이 추가된다면 여기에 나열하세요.
 )
 
-# 5. 라이브러리 링크
-target_link_libraries(dsr_rt_control PRIVATE 
-    DRFL PocoNet PocoFoundation pthread rt
+# 6. 출력 경로 설정
+# 빌드된 .so 파일이 'rt_py' 폴더로 바로 들어가도록 설정
+set_target_properties(rt_control_cpp_impl PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/rt_py"
 )
 
-# 🌟 6. 빌드 성공 시, 깔끔해진 dsr_rt_control.so 파일을 파이썬 폴더로 자동 복사!
-add_custom_command(TARGET dsr_rt_control POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:dsr_rt_control> ${CMAKE_SOURCE_DIR}/rt_control_py/m1013/
-)
+# 7. 컴파일 옵션 (필요시 추가)
+if(MSVC)
+    target_compile_options(rt_control_cpp_impl PRIVATE /W4)
+else()
+    target_compile_options(rt_control_cpp_impl PRIVATE -Wall -Wextra)
+endif()

@@ -53,19 +53,29 @@ public:
     using jacobian_t = Eigen::Matrix<double, 6, 6>;
 
 private:
-    std::string m_model_name;
-    angles_t m_min_angles, m_max_angles;
-    angles_t m_min_angvels, m_max_angvels;
-    angles_t m_min_angaccs, m_max_angaccs;
+    std::string m_model_name = "none"; // 기본값 설정
+    angles_t m_min_angles = angles_t::Zero();
+    angles_t m_max_angles = angles_t::Zero();
+    angles_t m_min_angvels = angles_t::Zero();
+    angles_t m_max_angvels = angles_t::Zero();
+    angles_t m_min_angaccs = angles_t::Zero();
+    angles_t m_max_angaccs = angles_t::Zero();
     std::array<Joint, 6> m_joints;
 
 public:
     RobotModel() = default;
-    explicit RobotModel(const std::string& model_name) { load_model(model_name); }
 
-    void load_model(const std::string& model_name) {
-        m_model_name = model_name;
+    // 생성자에서 로드 실패 시 예외를 던짐
+    explicit RobotModel(const std::string& model_name) {
+        if (!load_model(model_name)) {
+            throw std::runtime_error("[RobotModel Error] 지원하지 않는 모델명입니다: " + model_name);
+        }
+    }
+
+    // 반환 타입을 bool로 변경하여 성공 여부 확인 가능하게 함
+    bool load_model(const std::string& model_name) {
         if (model_name == "m1013") {
+            m_model_name = model_name;
             m_min_angles = m1013::MIN_ANGLES; 
             m_max_angles = m1013::MAX_ANGLES;
             m_min_angvels = m1013::MIN_ANGVELS; 
@@ -73,7 +83,9 @@ public:
             m_min_angaccs = m1013::MAX_ANGACCS; 
             m_max_angaccs = m1013::MAX_ANGACCS;
             m_joints = m1013::joints;
+            return true;
         } else if (model_name == "hcr14") {
+            m_model_name = model_name;
             m_min_angles = hcr14::MIN_ANGLES; 
             m_max_angles = hcr14::MAX_ANGLES;
             m_min_angvels = hcr14::MAX_ANGVELS; 
@@ -81,7 +93,11 @@ public:
             m_min_angaccs = hcr14::MAX_ANGACCS; 
             m_max_angaccs = hcr14::MAX_ANGACCS;
             m_joints = hcr14::joints;
+            return true;
         }
+
+        // 일치하는 모델이 없을 경우
+        return false;
     }
 
     [[nodiscard]] Eigen::Isometry3d forward_kinematics(const angles_t& q_deg) const {
