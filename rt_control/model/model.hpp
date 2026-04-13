@@ -18,6 +18,7 @@ enum class LinkID { base, link1, link2, link3, link4, link5, link6 };
 enum class JointID { joint1, joint2, joint3, joint4, joint5, joint6 };
 
 struct Joint {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     JointID id;
     LinkID parent;
     LinkID child;
@@ -48,6 +49,7 @@ namespace model {
 
 class RobotModel {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     using angles_t = rt_control::angles_t;
     using value_t = rt_control::value_t;
     using jacobian_t = Eigen::Matrix<double, 6, 6>;

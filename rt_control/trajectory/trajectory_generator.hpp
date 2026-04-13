@@ -30,6 +30,9 @@ enum class TrajState {
 
 class TrajGenerator {
   public:
+
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
     using traj_state_t = TrajState;
     using value_t = rt_control::value_t;
     using angles_t = rt_control::angles_t;
@@ -51,15 +54,27 @@ class TrajGenerator {
                     const angles_t &start_angles, 
                     const angles_t &start_angvels, 
                     const angles_t &start_angaccs) noexcept {
+        
+        std::cout << "[Debug] 1. Initialize Start" << std::endl;
+        
+        // 모델 복사
         m_model = robot_model;
+        std::cout << "[Debug] 2. Model Copied. Name: " << m_model.get_model_name() << std::endl;
+
+        // 초기값 설정
         m_angles = start_angles;
         m_angvels = start_angvels;
         m_angaccs = start_angaccs;
+        std::cout << "[Debug] 3. Angles set: " << m_angles.transpose() << std::endl;
 
-        update_subordinates();
+        // 🌟 여기서 Segfault가 나는지 확인해야 합니다!
+        std::cout << "[Debug] 4. Calling update_subordinates()..." << std::endl;
+        update_subordinates(); 
+        
+        std::cout << "[Debug] 5. Initialize Done" << std::endl;
         m_traj_state = traj_state_t::STOP;
     }
-
+    
     void update(const value_t &dt) noexcept {
         switch (m_traj_state) {
             case traj_state_t::STOP:

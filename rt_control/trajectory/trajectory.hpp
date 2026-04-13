@@ -6,3 +6,4 @@
 #include "trajectory_attrl.hpp"
 #include "trajectory_stop.hpp"
 #include "trajectory_playj.hpp"
+#include "trajectory_generator.hpp"
