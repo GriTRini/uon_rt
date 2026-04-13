@@ -12,6 +12,7 @@ namespace trajectory {
 
 class TrajTrapJ {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     using angles_t = rt_control::angles_t;
     using value_t = rt_control::value_t;
 
