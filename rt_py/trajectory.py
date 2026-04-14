@@ -1,14 +1,14 @@
 import numpy as np
 import numpy.typing as npt
 from typing import Optional
-from . import rt_bind as _dsrb
+from . import rt_bind as _rtb
 
-class RobotModel(_dsrb.RobotModel):
+class RobotModel(_rtb.RobotModel):
     """로봇 기구학 모델 정보를 관리하는 클래스"""
     def __init__(self, model_name: str):
         super().__init__(model_name)
 
-class TrajGenerator(_dsrb.TrajGenerator):
+class TrajGenerator(_rtb.TrajGenerator):
     """
     순수 시뮬레이션용 궤적 생성기 인터페이스.
     하드웨어 연결 없이 파이썬에서 update(dt)를 직접 호출하여 궤적을 연산합니다.

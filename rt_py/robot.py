@@ -2,16 +2,15 @@ import numpy as np
 import numpy.typing as npt
 from typing import Optional
 import datetime
-from . import rt_bind as _dsrb
-from .rtenum import OpenConnError, ServoOnError, ServoOffError, CloseConnError
+from . import rt_bind as _rtb
 
 def create_robot(model_name: str = "m1013"):
     """
     C++ RobotFactory를 호출하여 모델에 맞는 로봇 객체를 생성합니다.
     """
-    return _dsrb.create_robot(model_name)
+    return _rtb.create_robot(model_name)
 
-class Robot(_dsrb.RobotBase):
+class Robot(_rtb.RobotBase):
     """
     Doosan Robotics 실로봇 제어를 위한 파이썬 인터페이스 (Header 역할).
     C++ DsrRobot 클래스의 기능을 상속받아 파이썬 친화적인 API를 제공합니다.

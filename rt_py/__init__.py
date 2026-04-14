@@ -1,7 +1,5 @@
-from .trajectory import TrajGenerator, RobotModel
 from .robot import Robot, create_robot
-from .rtenum import *
-from .rtdata import *
+from .trajectory import TrajGenerator, RobotModel
 
-__version__ = "1.1.0"
-__all__ = ["TrajGenerator", "RobotModel", "Robot", "create_robot"]
+__version__ = "1.2.0"
+__all__ = ["Robot", "create_robot", "TrajGenerator", "RobotModel"]

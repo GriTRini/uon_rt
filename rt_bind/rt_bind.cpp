@@ -8,7 +8,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(rt_control_cpp_impl, m) {
+PYBIND11_MODULE(rt_bind, m) {
     m.doc() = "uon robotics unified control library (Full Features & Keyword Arguments)";
 
     // ---------------------------------------------------------
