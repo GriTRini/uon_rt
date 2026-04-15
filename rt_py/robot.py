@@ -126,3 +126,8 @@ class Robot(_rtb.RobotBase):
             r_th: 회전 오차 임계값 [deg]
         """
         return super().goal_reached(q_th, p_th, r_th)
+    
+    @property
+    def flange_tmat(self) -> npt.NDArray:
+        """TCP 오프셋이 적용되지 않은 순수 손목 포즈"""
+        return super().flange_tmat

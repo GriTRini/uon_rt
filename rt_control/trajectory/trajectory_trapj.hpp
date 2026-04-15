@@ -25,8 +25,7 @@ public:
 public:
     TrajTrapJ() : m_valid(false) {}
 
-    // DSR 인터페이스에 맞춘 생성자
-    TrajTrapJ([[maybe_unused]]const model::RobotModel* model, // 모델 포인터 사용 (필요시 모델 한계치 참조)
+    TrajTrapJ(const model::RobotModel* model, 
               const angles_t& q_start, const angles_t& dq_start,
               const angles_t& q_goal, const angles_t& dq_goal,
               const angles_t& peak_v, const angles_t& peak_a,
@@ -36,9 +35,8 @@ public:
           m_time(0.0), m_valid(true) {
         
         m_profiles.resize(6);
-        angles_t individual_durations;
+        angles_t individual_durations = angles_t::Zero();
 
-        // 1단계: 각 조인트별 최소 소요 시간 계산
         for (int i = 0; i < 6; ++i) {
             m_profiles[i] = plan_profile(q_start(i), dq_start(i), q_goal(i), dq_goal(i), 
                                          peak_v(i), peak_a(i), std::nullopt);
@@ -46,15 +44,16 @@ public:
             if (!m_profiles[i].valid) m_valid = false;
         }
 
-        // 2단계: 동기화를 위한 최대 시간 설정
-        m_max_duration = target_duration.has_value() ? *target_duration : individual_durations.maxCoeff();
+        m_max_duration = individual_durations.maxCoeff();
+        if (target_duration.has_value()) {
+            m_max_duration = std::max(m_max_duration, *target_duration);
+        }
         
         if (m_max_duration < 1e-6) {
             m_max_duration = 0.0;
             return;
         }
 
-        // 3단계: 최대 시간에 맞춰 모든 조인트 재플래닝
         for (int i = 0; i < 6; ++i) {
             m_profiles[i] = plan_profile(q_start(i), dq_start(i), q_goal(i), dq_goal(i), 
                                          peak_v(i), peak_a(i), m_max_duration);
@@ -62,7 +61,7 @@ public:
         }
     }
 
-    // DSR TrajGenerator에서 사용하는 메서드들
+    // 🌟 TrajGenerator에서 요구하는 필수 인터페이스 (Getter 추가)
     bool valid() const { return m_valid; }
     const angles_t& goal_angles() const { return m_q_goal; }
     const angles_t& goal_angvels() const { return m_dq_goal; }
@@ -72,7 +71,6 @@ public:
             m_angles = m_q_goal;
             m_angvels = m_dq_goal;
             m_angaccs.setZero();
-            m_time = m_max_duration;
             return;
         }
 
@@ -99,59 +97,52 @@ private:
                         value_t v_max, value_t a_max, std::optional<value_t> T) {
         Profile p;
         value_t dist = xf - x0;
-        value_t dir = (dist >= 0) ? 1.0 : -1.0;
-
-        // 정지 상태 체크
+        
         if (std::abs(dist) < 1e-8 && std::abs(v0) < 1e-8 && std::abs(vf) < 1e-8) {
             p.duration = 0.0; p.valid = true; return p;
         }
 
+        value_t dir = (dist >= 0) ? 1.0 : -1.0;
         p.a_acc = a_max * dir;
         p.a_dec = -a_max * dir;
 
         if (T.has_value() && *T > 1e-6) {
             value_t duration = *T;
-            // 근의 공식 기반 v_const 계산 (T에 맞춤)
             value_t a = p.a_acc - p.a_dec;
-            if (std::abs(a) < 1e-9) { // 가속도가 0인 경우 (등속)
-                p.v_const = dist / duration;
-                p.t_acc = 0; p.t_dec = 0; p.t_const = duration;
-            } else {
-                value_t b = (p.a_acc * p.a_dec * duration + p.a_dec * v0 - p.a_acc * vf) * 2.0;
-                value_t c = p.a_acc * vf * vf - p.a_dec * v0 * v0 + p.a_acc * p.a_dec * (x0 - xf) * 2.0;
-                
-                value_t det = b * b - 4.0 * a * c;
-                if (det < 0) det = 0;
+            value_t b = (p.a_acc * p.a_dec * duration + p.a_dec * v0 - p.a_acc * vf) * 2.0;
+            value_t c = p.a_acc * vf * vf - p.a_dec * v0 * v0 + p.a_acc * p.a_dec * (x0 - xf) * 2.0;
+            
+            value_t det = b * b - 4.0 * a * c;
+            if (det < 0) det = 0;
 
-                value_t v_sol1 = (-b + std::sqrt(det)) / (2.0 * a);
-                value_t v_sol2 = (-b - std::sqrt(det)) / (2.0 * a);
-                
-                // 시간 t1, t2, t3가 모두 양수인 해를 선택
-                bool found = false;
-                for (value_t v : {v_sol1, v_sol2}) {
-                    value_t t1 = (v - v0) / p.a_acc;
-                    value_t t3 = (vf - v) / p.a_dec;
-                    value_t t2 = duration - t1 - t3;
+            value_t v_sol1 = (-b + std::sqrt(det)) / (2.0 * a);
+            value_t v_sol2 = (-b - std::sqrt(det)) / (2.0 * a);
+            
+            bool found = false;
+            for (value_t v : {v_sol1, v_sol2}) {
+                if (std::abs(v) > v_max * 1.05) continue; 
 
-                    if (t1 >= -1e-6 && t2 >= -1e-6 && t3 >= -1e-6) {
-                        p.v_const = v;
-                        p.t_acc = std::max(0.0, t1);
-                        p.t_const = std::max(0.0, t2);
-                        p.t_dec = std::max(0.0, t3);
-                        found = true; break;
-                    }
-                }
-                if (!found) { // 가감속만으로 목표에 도달하지 못할 경우 (삼각형 프로파일 강제)
-                    p.t_const = 0.0;
-                    p.v_const = (2.0 * dist / duration) - (v0 + vf) / 2.0;
-                    p.t_acc = std::max(0.0, (p.v_const - v0) / p.a_acc);
-                    p.t_dec = std::max(0.0, (vf - p.v_const) / p.a_dec);
+                value_t t1 = (v - v0) / p.a_acc;
+                value_t t3 = (vf - v) / p.a_dec;
+                value_t t2 = duration - t1 - t3;
+
+                if (t1 >= -1e-6 && t2 >= -1e-6 && t3 >= -1e-6) {
+                    p.v_const = v;
+                    p.t_acc = std::max(0.0, t1);
+                    p.t_const = std::max(0.0, t2);
+                    p.t_dec = std::max(0.0, t3);
+                    found = true; break;
                 }
             }
+
+            if (!found) {
+                p.v_const = std::clamp((2.0 * dist / duration) - (v0 + vf) / 2.0, -v_max, v_max);
+                p.t_acc = std::max(0.0, (p.v_const - v0) / p.a_acc);
+                p.t_dec = std::max(0.0, (vf - p.v_const) / p.a_dec);
+                p.t_const = std::max(0.0, duration - p.t_acc - p.t_dec);
+            }
             p.duration = duration;
-            p.valid = true;
         } else {
-            // 시간 제한 없을 때: 최대 가속/속도 기반 최단 시간 계산
             p.v_const = v_max * dir;
             p.t_acc = std::max(0.0, (p.v_const - v0) / p.a_acc);
             p.t_dec = std::max(0.0, (vf - p.v_const) / p.a_dec);
@@ -160,7 +151,7 @@ private:
             value_t s_dec = (vf + p.v_const) * p.t_dec * 0.5;
             p.t_const = (dist - s_acc - s_dec) / p.v_const;
             
-            if (p.t_const < 0) { // 사다리꼴이 아닌 삼각형 프로파일이 필요한 경우
+            if (p.t_const < 0) { 
                 p.t_const = 0.0;
                 value_t v_sq = (2.0 * p.a_acc * p.a_dec * dist + p.a_dec * v0 * v0 - p.a_acc * vf * vf) / (p.a_dec - p.a_acc);
                 p.v_const = std::sqrt(std::max(0.0, v_sq)) * dir;
@@ -168,14 +159,14 @@ private:
                 p.t_dec = std::max(0.0, (vf - p.v_const) / p.a_dec);
             }
             p.duration = p.t_acc + p.t_const + p.t_dec;
-            p.valid = true;
         }
+        p.valid = true;
         return p;
     }
 
     void calculate_state(int i, value_t t, value_t& x, value_t& v, value_t& a) {
         const auto& p = m_profiles[i];
-        if (p.duration <= 1e-9 || t >= p.duration) {
+        if (t >= p.duration) {
             x = m_q_goal(i); v = m_dq_goal(i); a = 0.0; return;
         }
 
@@ -202,8 +193,7 @@ private:
     angles_t m_q_start, m_dq_start, m_q_goal, m_dq_goal;
     angles_t m_angles, m_angvels, m_angaccs;
     std::vector<Profile> m_profiles;
-    value_t m_time = 0.0;
-    value_t m_max_duration = 0.0;
+    value_t m_time = 0.0, m_max_duration = 0.0;
     bool m_valid = false;
 };
 
