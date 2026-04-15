@@ -16,7 +16,7 @@ public:
 
     // 1. 초기화 및 기본 업데이트
     void initialize_py(const rt_control::model::RobotModel& model, 
-                       const py::array_t<double>& q, const py::array_t<double>& dq, const py::array_t<double>& ddq) {
+                        const py::array_t<double>& q, const py::array_t<double>& dq, const py::array_t<double>& ddq) {
         Eigen::Map<const rt_control::angles_t, Eigen::Unaligned> m_q(q.data()), m_dq(dq.data()), m_ddq(ddq.data());
         Base::initialize(model, m_q, m_dq, m_ddq);
     }
@@ -30,37 +30,38 @@ public:
 
     // 3. [Joint Space] TrapJ
    bool trapj_py(const py::array_t<double>& goal_q, const std::optional<py::array_t<double>>& goal_dq) {
-        // 목표 각도 매핑
         Eigen::Map<const rt_control::angles_t, Eigen::Unaligned> m_gq(goal_q.data());
         
-        // 목표 속도 처리 (삼항 연산자 대신 if-else 사용)
         rt_control::angles_t m_gdq;
         if (goal_dq.has_value()) {
-            // optional에 값이 있으면 NumPy 데이터를 매핑해서 할당
             m_gdq = Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(goal_dq->data());
         } else {
-            // 값이 없으면 Zero() 할당
             m_gdq = rt_control::angles_t::Zero();
         }
         
         return Base::trapj(m_gq, m_gdq);
     }
 
-    // 4. [Task Space] AttrL & Align
+    // 4. [Task Space] AttrL & Align (🌟 행렬 매핑 수정됨)
     bool attrl_py(const py::array_t<double>& goal_tmat, double kp) {
-        Eigen::Map<const Eigen::Matrix4d, Eigen::Unaligned> map_t(goal_tmat.data());
-        Eigen::Isometry3d target; target.matrix() = map_t;
+        // NumPy(RowMajor) 데이터를 Eigen이 오해하지 않도록 RowMajor 레이아웃을 명시합니다.
+        Eigen::Map<const Eigen::Matrix<double, 4, 4, Eigen::RowMajor>> map_t(goal_tmat.data());
+        
+        // Isometry3d에 대입하면 Eigen 내부적으로 최적화된 ColumnMajor 형태로 변환됩니다.
+        Eigen::Isometry3d target; 
+        target.matrix() = map_t; 
+        
         return Base::attrl(target, kp);
     }
 
     bool align_tcp_to_floor_py(double yaw_deg, double kp) { return Base::align_tcp_to_floor(yaw_deg, kp); }
     bool align_tcp_to_front_py(double kp) { return Base::align_tcp_to_front(kp); }
 
-    // 5. Getters (Eigen -> NumPy)
-    auto angles_py() const   { return rtb::to_pyarray(Base::angles()); }
-    auto tmat_py() const     { return rtb::to_pyarray(Base::tmat()); }
+    // 5. Getters
+    auto angles_py() const      { return rtb::to_pyarray(Base::angles()); }
+    auto tmat_py() const        { return rtb::to_pyarray(Base::tmat()); }
     auto flange_tmat_py() const { return rtb::to_pyarray(Base::flange_tmat()); }
-    auto jmat_py() const     { return rtb::to_pyarray(Base::jmat()); }
+    auto jmat_py() const        { return rtb::to_pyarray(Base::jmat()); }
 
     // 6. Error & Status Getters
     double angles_enorm_py() const { return Base::angles_enorm().value_or(-1.0); }

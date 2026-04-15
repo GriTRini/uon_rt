@@ -1,118 +1,112 @@
-import rt_control_cpp_impl as rc
+import rt_bind as rc
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import time
 
-def run_simulation():
-    print("🚀 [Simulation] 인터랙티브 Pick & Place 시뮬레이션 시작")
+def run_stress_test():
+    print("🔥 [Stress Test] 로봇 각속도/각가속도 한계 테스트 시작")
     
-    # 1. 초기화 (Model & Generator)
+    # 1. 초기화
     model = rc.RobotModel("m1013")
     gen = rc.TrajGenerator()
     
-    q_init = np.array([-90.0, 0.0, -90.0, 0.0, -90.0, 0.0]) # 초기 자세
+    # 시작 자세 (중립적인 위치)
+    q_init = np.array([0.0, 0.0, -90.0, 0.0, -90.0, 0.0])
     gen.initialize(model, q_init, np.zeros(6), np.zeros(6))
-    
-    # 2. TCP 설정 (Z +381.9mm 등 실제 툴 정보 반영)
-    tcp_x, tcp_y, tcp_z = -0.029, 0.0, 0.3819
-    gen.set_tcp(tcp_x, tcp_y, tcp_z, 0.0, 0.0, 0.0)
-    print(f"📍 TCP Offset 설정 완료: Z {tcp_z*1000:.1f}mm")
+    gen.set_tcp(0.0, 0.0, 0.0, 0.0, 0.0, 0.0) # 계산 단순화를 위해 툴 오프셋 0
 
-    dt = 0.001
+    dt = 0.001 # 1ms 정밀 시뮬레이션
     t = 0.0
-    history = {"time": [], "q": [], "pos": [], "mode": []}
-
-    def update_sim(mode_id, duration=10.0):
-        nonlocal t
-        start_t = t
-        # goal_reached 판단은 시뮬레이션 루프 내부에서 수행
-        while not gen.goal_reached(q_th=0.1, p_th=0.001, r_th=0.1):
-            gen.update(dt)
-            history["time"].append(t)
-            history["q"].append(gen.angles.copy())
-            history["pos"].append(gen.tmat[:3, 3].copy())
-            history["mode"].append(mode_id)
-            t += dt
-            if (t - start_t) > duration: break
-
-    # ---------------------------------------------------------
-    # [Step 1] Home 자세 이동 및 바닥 정렬
-    # ---------------------------------------------------------
-    print("\n[Step 1] 초기 자세 및 바닥 정렬 중...")
-    gen.trapj(q_init)
-    update_sim(1)
     
-    gen.align_to_floor(yaw_deg=90.0, kp=60.0)
-    update_sim(2)
+    # 데이터 기록용
+    history = {
+        "time": [], "q": [], "dq": [], "ddq": [], "pos": []
+    }
 
     # ---------------------------------------------------------
-    # [Step 2] 인터랙티브 루프
+    # [Stress Test 설정]
     # ---------------------------------------------------------
+    # 매우 먼 두 지점을 설정하여 순간 속도를 극대화
+    targets = [
+        np.array([[1, 0, 0, 0.5], [0, 1, 0, -0.3], [0, 0, 1, 0.6], [0, 0, 0, 1]]), # Point A
+        np.array([[1, 0, 0, -0.4], [0, 1, 0, 0.4], [0, 0, 1, 0.1], [0, 0, 0, 1]]) # Point B
+    ]
+    
+    aggressive_kp = 500.0  # 과격한 게인 설정 (보통 50~100 사용)
+    num_cycles = 2
+    
+    prev_q = q_init.copy()
+    prev_dq = np.zeros(6)
+
+    print(f"🚀 테스트 설정: KP = {aggressive_kp}, 목표 지점 간 이동")
+
+    for i in range(num_cycles):
+        for idx, target_mat in enumerate(targets):
+            print(f"  ▶ Cycle {i+1} - Target {idx+1} 이동 중...")
+            gen.attrl(target_mat, kp=aggressive_kp)
+            
+            # 이동 완료 시까지 루프
+            timeout = 0
+            while not gen.goal_reached(p_th=0.001, r_th=0.1):
+                gen.update(dt)
+                
+                curr_q = gen.angles.copy()
+                
+                # 수치 미분: 각속도 (dq = delta_q / dt)
+                curr_dq = (curr_q - prev_q) / dt
+                # 수치 미분: 각가속도 (ddq = delta_dq / dt)
+                curr_ddq = (curr_dq - prev_dq) / dt
+                
+                # 기록
+                history["time"].append(t)
+                history["q"].append(curr_q)
+                history["dq"].append(curr_dq)
+                history["ddq"].append(curr_ddq)
+                history["pos"].append(gen.tmat[:3, 3].copy())
+                
+                # 변수 업데이트
+                prev_q = curr_q
+                prev_dq = curr_dq
+                t += dt
+                timeout += 1
+                if timeout > 5000: break # 5초 이상 걸리면 강제 종료
+
+    # ---------------------------------------------------------
+    # [데이터 분석 및 시각화]
+    # ---------------------------------------------------------
+    dq_all = np.array(history["dq"])
+    ddq_all = np.array(history["ddq"])
+    
+    # 최대치 계산 (각 관절별)
+    max_dq = np.max(np.abs(dq_all), axis=0)
+    max_ddq = np.max(np.abs(ddq_all), axis=0)
+
     print("\n" + "="*50)
-    print("시뮬레이션 좌표 입력 (m 단위, 예: 0.5 0.1 0.2)")
-    print("'q' 입력 시 종료 및 데이터 저장")
+    print("📊 [Stress Test 결과 요약]")
+    for j in range(6):
+        print(f"Joint {j+1}: Max Vel = {max_dq[j]:8.2f} deg/s | Max Accel = {max_ddq[j]:10.2f} deg/s²")
     print("="*50)
 
-    try:
-        while True:
-            val = input("\n🟩 [PICK] 목표 X Y Z: ")
-            if val.lower() == 'q': break
-            try:
-                px, py, pz = map(float, val.split())
-            except: continue
+    # 그래프 그리기
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
 
-            # Pick 시퀀스 (Approach -> Reach -> Retract)
-            for sub_name, z_off in [("Approach", 0.05), ("Reach", 0.0), ("Retract", 0.1)]:
-                print(f"  ▶ Pick {sub_name} 중...")
-                target_mat = gen.tmat.copy()
-                target_mat[:3, 3] = [px, py, pz + z_off]
-                gen.attrl(target_mat, kp=40.0)
-                update_sim(3)
+    # 1. 각속도 그래프
+    for j in range(6):
+        ax1.plot(history["time"], dq_all[:, j], label=f'J{j+1}')
+    ax1.set_title(f"Joint Velocities (KP={aggressive_kp})")
+    ax1.set_ylabel("Velocity (deg/s)")
+    ax1.grid(True); ax1.legend(loc='right')
 
-            val = input("🟦 [PLACE] 목표 X Y Z: ")
-            if val.lower() == 'q': break
-            try:
-                lx, ly, lz = map(float, val.split())
-            except: continue
+    # 2. 각가속도 그래프
+    for j in range(6):
+        ax2.plot(history["time"], ddq_all[:, j], label=f'J{j+1}')
+    ax2.set_title("Joint Accelerations")
+    ax2.set_xlabel("Time (s)"); ax2.set_ylabel("Acceleration (deg/s²)")
+    ax2.grid(True); ax2.legend(loc='right')
 
-            # Place 시퀀스 (Approach -> Reach -> Retract)
-            for sub_name, z_off in [("Approach", 0.05), ("Reach", 0.0), ("Retract", 0.1)]:
-                print(f"  ▶ Place {sub_name} 중...")
-                target_mat = gen.tmat.copy()
-                target_mat[:3, 3] = [lx, ly, lz + z_off]
-                gen.attrl(target_mat, kp=40.0)
-                update_sim(4)
-            
-            print("✅ 시뮬레이션 사이클 완료!")
-
-    except KeyboardInterrupt:
-        pass
-
-    # ---------------------------------------------------------
-    # [Step 3] 데이터 저장 및 시각화
-    # ---------------------------------------------------------
-    if history["time"]:
-        print(f"\n✅ 시뮬레이션 종료 (총 시간: {t:.2f}s)")
-        q_all = np.array(history["q"])
-        pos_all = np.array(history["pos"])
-        
-        df = pd.DataFrame({
-            "time": history["time"],
-            "x": pos_all[:, 0], "y": pos_all[:, 1], "z": pos_all[:, 2],
-            "mode": history["mode"]
-        })
-        df.to_csv("simulation_interactive_data.csv", index=False)
-        print("💾 저장 완료: simulation_interactive_data.csv")
-
-        # 결과 그래프 (TCP Z축 궤적)
-        plt.figure(figsize=(10, 6))
-        plt.plot(history["time"], pos_all[:, 2], color='blue', label='TCP Z-height')
-        plt.fill_between(history["time"], 0, pos_all[:, 2], alpha=0.1)
-        plt.title("Simulation: TCP Z-axis Motion Profile")
-        plt.xlabel("Time (s)"); plt.ylabel("Position (m)")
-        plt.grid(True); plt.legend()
-        plt.show()
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
-    run_simulation()
+    run_stress_test()

@@ -11,12 +11,12 @@ inline const angles_t HW_MAX_ANGLES = (angles_t() << 360, 95, 145, 360, 135, 360
 inline const angles_t MIN_ANGLES = (HW_MIN_ANGLES.array() + 5.0).matrix();
 inline const angles_t MAX_ANGLES = (HW_MAX_ANGLES.array() - 5.0).matrix();
 
-inline const angles_t MAX_ANGVELS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
-// inline const angles_t MAX_ANGVELS = (angles_t() << 100, 100, 140, 225, 180, 180).finished();
+// inline const angles_t MAX_ANGVELS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
+inline const angles_t MAX_ANGVELS = (angles_t() << 100, 100, 160, 200, 200, 200).finished();
 inline const angles_t MIN_ANGVELS = -MAX_ANGVELS;
 
-inline const angles_t MAX_ANGACCS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
-// inline const angles_t MAX_ANGACCS = (angles_t() << 100, 100, 140, 225, 180, 180).finished();
+// inline const angles_t MAX_ANGACCS = (angles_t() << 120, 120, 180, 225, 225, 255).finished();
+inline const angles_t MAX_ANGACCS = (angles_t() << 100, 100, 160, 200, 200, 200).finished();
 inline const angles_t MIN_ANGACCS = -MAX_ANGACCS;
 
 inline const std::array<Joint, 6> joints = {
