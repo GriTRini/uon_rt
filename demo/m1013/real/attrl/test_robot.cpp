@@ -1,124 +1,164 @@
 #include <iostream>
+#include <vector>
+#include <iomanip>
+#include <fstream>
 #include <chrono>
 #include <thread>
 #include <csignal>
 #include <atomic>
-#include <vector>
-#include <Eigen/Dense>
+#include <string>
+#include <optional>
+#include "../../../../rt_control/dsr/dsr_robot.hpp" 
 
-// 🌟 새로 만든 팩토리 헤더를 인클루드합니다 (경로는 프로젝트 트리에 맞게 조정)
-#include "../../../rt_control/core/robot_factory.hpp" 
+using namespace rt_control; // 네임스페이스 수정
 
-// 🌟 네임스페이스를 새 아키텍처에 맞게 변경합니다
-using namespace rt_control; 
-
-// 전역 변수 및 시그널 핸들러 (Ctrl+C 종료용)
 std::atomic<bool> keep_running(true);
 void sigint_handler(int signum) { keep_running = false; }
 
 int main() {
     std::signal(SIGINT, sigint_handler);
 
-    // 1. 로봇 객체 동적 생성 (팩토리 패턴 사용)
-    // "m1013" 입력 시 내부적으로 DsrRobot 객체가 생성되어 반환됩니다.
-    std::unique_ptr<RobotBase> robot = RobotFactory::create("m1013");
-    
-    if (!robot) {
-        std::cerr << "❌ 로봇 객체 생성 실패! 모델명을 확인하세요." << std::endl;
-        return -1;
-    }
-
+    // 💡 수정됨: Robot<0> 대신 DsrRobot 클래스를 직접 사용
+    DsrRobot robot("m1013", std::chrono::milliseconds(1));
     const std::string robot_ip = "192.168.1.30";
     
-    // 🌟 이번 테스트는 Flange 기준이므로 TCP를 Identity(0)로 설정하거나 설정하지 않습니다.
-    // 만약 그리퍼가 달려있다면 set_tcp를 호출하세요.
-    // robot->set_tcp(0, 0, 0, 0, 0, 0); 
+    // [설정] TCP 오프셋
+    const double tx = -0.029, ty = 0.0, tz = 0.3819;
+    const double tr = 0.0, tp = 0.0, tyw = 0.0;
 
-    // 2. 연결 및 서보 온 (포인터 방식 적용 및 bool 반환값 체크)
-    std::cout << "로봇 연결 중..." << std::endl;
-    if (!robot->open_connection(robot_ip, 12345)) {
-        std::cerr << "❌ open_connection 실패" << std::endl;
-        return -1;
-    }
-    if (!robot->connect_rt(robot_ip, 12347)) {
-        std::cerr << "❌ connect_rt 실패" << std::endl;
-        return -1;
-    }
-    if (!robot->servo_on()) {
-        std::cerr << "❌ servo_on 실패" << std::endl;
-        return -1;
-    }
-    std::cout << "✅ 로봇 연결 및 서보 온 완료!" << std::endl;
+    // 데이터 로깅용 CSV
+    std::ofstream csv("sequence_test_log.csv");
+    csv << "Time,Step,J1,J2,J3,J4,J5,J6,TCP_X,TCP_Y,TCP_Z\n";
 
-    // 동작 완료 대기 헬퍼 함수
-    auto wait_until_done = [&](const std::string& task_name) {
-        auto next_wake_time = std::chrono::high_resolution_clock::now();
+    // 로봇 연결 및 서보 온
+    std::cout << "로봇 연결을 시도합니다..." << std::endl;
+    // (OpenConnError 같은 enum이 rt_control에 없는 경우 단순 int 캐스팅이나 제거가 필요할 수 있으나 기존 형태 유지)
+    if (!robot.open_connection(robot_ip, 12345)) return -1;
+    if (!robot.connect_rt(robot_ip, 12347)) return -1;
+    if (!robot.servo_on()) return -1;
+
+    double total_time = 0.0;
+
+    // =========================================================================
+    // 🌟 모니터링 함수
+    // =========================================================================
+    auto wait_goal = [&](const std::string& info, 
+                         double p_th = 0.02,  
+                         double r_th = 1.0,   
+                         double timeout_sec = 100.0) -> bool { 
+        int loop_count = 0;
+        double start_time = total_time;
+        
         while (keep_running) {
-            // goal_reached(조인트오차 0.1도, 위치오차 2mm, 회전오차 1도)
-            if (robot->get_goal_reached(0.1, 0.002, 1.0)) break;
+            if (robot.has_alarm()) {
+                std::cerr << "❌ [알람 발생] 로봇 동작 중단: " << info << std::endl;
+                return false; 
+            }
+
+            bool reached = robot.get_goal_reached(std::nullopt, p_th, r_th);
+            auto cur_q = robot.get_current_angles();
+            std::optional<Eigen::Isometry3d> cur_tcp_opt = std::nullopt;
             
-            next_wake_time += std::chrono::milliseconds(1);
-            std::this_thread::sleep_until(next_wake_time);
+            if (cur_q) cur_tcp_opt = robot.solve_forward(*cur_q);
+
+            if (cur_q && cur_tcp_opt) {
+                Eigen::Isometry3d cur_tcp = *cur_tcp_opt;
+                csv << std::fixed << std::setprecision(5) << total_time << "," << info << ",";
+                for(int i=0; i<6; ++i) csv << (*cur_q)(i) << ",";
+                csv << cur_tcp.translation().x() << "," << cur_tcp.translation().y() << "," << cur_tcp.translation().z() << "\n";
+            }
+
+            if (loop_count % 500 == 0) {
+                // 💡 수정됨: rt_control::angles_t 사용
+                rt_control::angles_t print_q = cur_q ? *cur_q : rt_control::angles_t::Zero(); 
+                std::cout << std::fixed << std::setprecision(4)
+                          << "[T: " << std::setw(6) << total_time << "s] " << std::setw(18) << info 
+                          << " | J: [" << print_q.transpose() << "]" << std::endl;
+            }
+
+            if (reached) {
+                std::cout << "      ✅ [" << info << "] 도달 완료!\n" << std::endl;
+                return true;
+            }
+            if ((total_time - start_time) >= timeout_sec) {
+                std::cout << "      ⚠️ [" << info << "] 타임아웃 발생\n" << std::endl;
+                return false;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            total_time += 0.001;
+            loop_count++;
         }
-        std::cout << "   -> ✅ " << task_name << " 완료" << std::endl;
+        return false;
     };
 
+    auto execute_move = [&](double x, double y, double z, double r, double p, double yaw, const std::string& step_info) -> bool {
+        if (!robot.attrl(x, y, z, r, p, yaw, 50.0)) return false; 
+        return wait_goal(step_info, 0.01, 1.0, 100.0);
+    };
+
+    // =========================================================================
+    // 🚀 메인 자동 시퀀스 실행부
+    // =========================================================================
     try {
-        // --- [STEP 1] trapj를 이용한 시작 포지션 이동 ---
-        std::cout << "\n📍 사각형 시작 지점으로 이동 (trapj)..." << std::endl;
+        std::cout << "\n1️⃣ [Set TCP] 툴 정보를 로봇에 입력합니다." << std::endl;
+        robot.set_tcp(tx, ty, tz, tr, tp, tyw);
+        for(int i=0; i<300; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); total_time += 0.001; }
         
-        // angles_t 타입을 가져올 때 RobotBase 내부에 선언된 using을 활용
-        RobotBase::angles_t q_start;
-        q_start << -90.0, 0.0, -90.0, 0.0, -90.0, 0.0; 
+        // ---------------------------------------------------------
+        // 2️⃣ 초기 홈 자세(Home Point)로 이동 (TrapJ)
+        // ---------------------------------------------------------
+        std::cout << "\n2️⃣ [홈 복귀] 초기 조인트 자세(-90, 0, -90, 0, -90, 0)로 이동합니다..." << std::endl;
         
-        if (robot->trapj(q_start)) { 
-            wait_until_done("시작 지점 도달");
+        // 💡 수정됨: rt_control::angles_t 사용
+        rt_control::angles_t home_pose;
+        home_pose << -90.0, 0.0, -90.0, 0.0, -90.0, 0.0;
+        
+        if (robot.trapj(home_pose)) {
+            if (!wait_goal("Move_To_Home")) throw std::runtime_error("홈 자세 이동 실패");
         }
 
-        if (keep_running) {
-            std::cout << "\n🚀 네모 그리기 시퀀스를 시작합니다. (3초 후 시작)" << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        total_time += 1.0;
 
-            // 🌟 현재 위치 가져오기 (get_task_pos -> get_current_pos)
-            Eigen::Isometry3d start_pose = robot->get_current_pos();
-            Eigen::Isometry3d target_pose = start_pose;
+        // ---------------------------------------------------------
+        // 3️⃣ 지정된 Task 위치로 이동 (attrl)
+        // ---------------------------------------------------------
+        double target_x = -0.500; 
+        double target_y =  0.100;
+        double target_z =  0.200;
+        double target_r =  180.0; 
+        double target_p =  0.0;
+        double target_yaw = 90.0; 
 
-            // 사각형 꼭짓점 오프셋 (단위: m)
-            // 200mm x 200mm 사각형 (파이썬 스타일 주석 #을 C++ 스타일 //로 수정)
-            std::vector<Eigen::Vector3d> move_offsets = {
-                {0.2, 0.0, 0.0},  // 1. 우측 이동
-                {0.0, 0.2, 0.0},  // 2. 전방 이동
-                {-0.2, 0.0, 0.0}, // 3. 좌측 이동
-                {0.0, -0.2, 0.0}  // 4. 후방 이동 (원점 복귀)
-            };
-
-            for (size_t i = 0; i < move_offsets.size(); ++i) {
-                if (!keep_running) break;
-
-                // 목표 포즈 갱신
-                target_pose.translation() += move_offsets[i];
-                
-                std::cout << "[" << i + 1 << "/4] 변 이동 중..." << std::endl;
-                
-                // attrl 실행 (속도 제한/제어 게인: 150.0)
-                if (robot->attrl(target_pose, 150.0)) {
-                    wait_until_done("변 " + std::to_string(i + 1));
-                }
-            }
+        std::cout << "\n3️⃣ [목표 이동] 지정된 Task 좌표로 이동합니다 (attrl)..." << std::endl;
+        
+        if (!execute_move(target_x, target_y, target_z, target_r, target_p, target_yaw, "Move_To_Target")) {
+            throw std::runtime_error("목표 좌표 이동 실패");
         }
 
-        std::cout << "\n🎉 모든 동작이 성공적으로 완료되었습니다." << std::endl;
+        std::cout << "\n  ⏱️ 목적지 도착. 2초 대기 중..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        total_time += 2.0;
+
+        // ---------------------------------------------------------
+        // 4️⃣ 다시 홈 자세(Home Point)로 복귀 (TrapJ)
+        // ---------------------------------------------------------
+        std::cout << "\n4️⃣ [작업 완료] 다시 홈 자세로 복귀합니다..." << std::endl;
+        if (robot.trapj(home_pose)) {
+            if (!wait_goal("Return_To_Home")) throw std::runtime_error("홈 복귀 실패");
+        }
 
     } catch (const std::exception& e) {
-        std::cerr << "❌ 에러 발생: " << e.what() << std::endl;
+        std::cerr << "❌ Error: " << e.what() << std::endl;
     }
 
-    // 종료 정리
-    std::cout << "\n프로그램 종료 및 로봇 연결 해제..." << std::endl;
-    robot->stop();
-    robot->servo_off();
-    robot->disconnect_rt();
-    robot->close_connection();
+    csv.close();
+    robot.stop();
+    (void)robot.servo_off();
+    robot.disconnect_rt();
+    (void)robot.close_connection();
     
+    std::cout << "\n🏁 [프로그램 정상 종료] 로봇 구동 완료!" << std::endl;
     return 0;
 }

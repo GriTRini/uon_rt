@@ -1,88 +1,45 @@
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import sys
 
-# --- M1013 기구학 파라미터 ---
-def get_transform(idx, q_deg):
-    q = np.radians(q_deg)
-    def m(x, y, z, r, p, yaw):
-        Rx = np.array([[1,0,0],[0,np.cos(r),-np.sin(r)],[0,np.sin(r),np.cos(r)]])
-        Ry = np.array([[np.cos(p),0,np.sin(p)],[0,1,0],[-np.sin(p),0,np.cos(p)]])
-        Rz = np.array([[np.cos(yaw),-np.sin(yaw),0],[np.sin(yaw),np.cos(yaw),0],[0,0,1]])
-        T = np.eye(4); T[:3,:3] = Rz @ Ry @ Rx; T[:3,3] = [x,y,z]
-        return T
-    
-    # M1013 전용 파라미터 적용
-    params = [
-        (0.0,  0.0,    0.1525, 0.0,      0.0,       0.0), 
-        (0.0,  0.0345, 0.0,    0.0,      -np.pi/2, -np.pi/2), 
-        (0.62, 0.0,    0.0,    0.0,      0.0,       np.pi/2),
-        (0.0, -0.559,  0.0,    np.pi/2,  0.0,       0.0), 
-        (0.0,  0.0,    0.0,   -np.pi/2,  0.0,       0.0), 
-        (0.0, -0.121,  0.0,    np.pi/2,  0.0,       0.0)
-    ]
-    p = params[idx]
-    T_origin = m(p[0], p[1], p[2], p[3], p[4], p[5])
-    T_rot = np.eye(4); T_rot[:3,:3] = [[np.cos(q),-np.sin(q),0], [np.sin(q),np.cos(q),0], [0,0,1]]
-    return T_origin @ T_rot
+# 데이터 로드
+df = pd.read_csv('robot_dynamics_data.csv')
 
-def animate_m1013_extreme(file_path):
-    try:
-        df = pd.read_csv(file_path)
-    except FileNotFoundError:
-        print(f"❌ 에러: '{file_path}' 파일을 찾을 수 없습니다.")
-        sys.exit()
+# 그래프 설정 (3행 1열: Position, Velocity, Acceleration)
+fig, axes = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
+plt.subplots_adjust(hspace=0.3)
 
-    df_sampled = df.iloc[::40, :].reset_index(drop=True)
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+labels = [f'J{i}' for i in range(1, 7)]
 
-    fig = plt.figure(figsize=(12, 9))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    # 로봇이 미친듯이 뻗어나가므로 축을 넉넉하게 잡습니다.
-    limit = 1.2
-    ax.set_xlim(-limit, limit); ax.set_ylim(-limit, limit); ax.set_zlim(0, limit)
-    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
-    ax.set_title('M1013 attrl Extreme Test (Singularity & Wobble Check)')
-    
-    line, = ax.plot([], [], [], 'o-', lw=6, color='#2980b9', label='M1013 Arm')
-    target_dot, = ax.plot([], [], [], 'r*', markersize=15, label='Target Goal')
-    path_line, = ax.plot([], [], [], '-', lw=2, color='#2ca02c', label='Flange Path')
+# 1. Position Plot
+for i in range(6):
+    axes[0].plot(df['Time'], df[f'J{i+1}_p'], color=colors[i], label=labels[i])
+axes[0].set_ylabel('Position (deg)')
+axes[0].set_title('Joint Positions')
+axes[0].grid(True, alpha=0.3)
+axes[0].legend(loc='upper right', ncol=3)
 
-    history_x, history_y, history_z = [], [], []
+# 2. Velocity Plot
+for i in range(6):
+    axes[1].plot(df['Time'], df[f'J{i+1}_v'], color=colors[i], label=labels[i])
+axes[1].set_ylabel('Velocity (deg/s)')
+axes[1].set_title('Joint Velocities')
+axes[1].grid(True, alpha=0.3)
 
-    def update(frame):
-        row = df_sampled.iloc[frame]
-        angles = row[['J1', 'J2', 'J3', 'J4', 'J5', 'J6']].values.astype(float)
-        scenario = row['Scenario']
-        
-        # 기구학 계산 (TCP 없음, Flange 끝단까지만)
-        T_accum = np.eye(4); pts = [np.zeros(3)]
-        for i in range(6):
-            T_accum = T_accum @ get_transform(i, angles[i])
-            pts.append(T_accum[:3, 3])
-        pts = np.array(pts)
-        
-        p_flange = pts[6] # 손목 끝단
-        
-        # 궤적 누적
-        history_x.append(p_flange[0])
-        history_y.append(p_flange[1])
-        history_z.append(p_flange[2])
+# 3. Acceleration Plot (Spike 확인용)
+for i in range(6):
+    axes[2].plot(df['Time'], df[f'J{i+1}_a'], color=colors[i], label=labels[i], alpha=0.7)
+axes[2].set_ylabel('Acceleration (deg/s²)')
+axes[2].set_xlabel('Time (sec)')
+axes[2].set_title('Joint Accelerations (Check for Discontinuity)')
+axes[2].grid(True, alpha=0.3)
 
-        # 그래프 업데이트
-        line.set_data(pts[:, 0], pts[:, 1]); line.set_3d_properties(pts[:, 2])
-        path_line.set_data(history_x, history_y); path_line.set_3d_properties(history_z)
-        target_dot.set_data([float(row['Target_X'])], [float(row['Target_Y'])])
-        target_dot.set_3d_properties([float(row['Target_Z'])])
-        
-        ax.set_title(f"Scenario: {scenario} | Frame: {frame}")
-        return line, target_dot, path_line
+# Mode 영역 표시 (AttrL, Stop, TrapJ 구간 구분)
+for ax in axes:
+    # Mode 2 (Stabilization) 구간을 회색 배경으로 표시
+    stop_start = df[df['Mode'] == 2]['Time'].min()
+    stop_end = df[df['Mode'] == 2]['Time'].max()
+    ax.axvspan(stop_start, stop_end, color='gray', alpha=0.2, label='Stabilization')
 
-    ani = FuncAnimation(fig, update, frames=len(df_sampled), interval=30, blit=False, repeat=False)
-    plt.legend(loc='upper right')
-    plt.show()
-
-if __name__ == "__main__":
-    animate_m1013_extreme('flange_fig8_sim_data.csv')
+plt.suptitle('Robot Joint Dynamics & Transition Analysis', fontsize=16)
+plt.show()

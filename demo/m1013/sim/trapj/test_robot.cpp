@@ -2,7 +2,6 @@
 #include <fstream>
 #include <iomanip>
 #include <vector>
-#include <string>
 #include <chrono>
 #include <numeric>
 #include <algorithm>
@@ -13,93 +12,68 @@ using namespace rt_control;
 using namespace rt_control::trajectory;
 
 int main() {
-    // 1. 로봇 모델 및 타겟 설정
+    // 1. 모델 설정 (M1013)
     rt_control::model::RobotModel model("m1013");
     
+    // 과격한 움직임을 위해 큰 변위 설정 (0도 -> 120도 급가속/급감속 유도)
     angles_t q_start;   q_start   << 0, 0, 0, 0, 0, 0;
-    angles_t q_target1; q_target1 << 0, 0, 90, 0, 0, 0; 
-    angles_t q_target2; q_target2 << 0, 0, 0, 0, 0, 0; // J6 이동으로 수정 (설명 기반)
-    angles_t q_target3; q_target3 << 0, 0, 90, 0, 0, 0;
+    angles_t q_target1; q_target1 << 120, 45, 90, 150, 90, 150; 
+    angles_t q_target2; q_target2 << -120, -45, -90, -150, -90, -150;
+    angles_t q_target3; q_target3 << 0, 0, 0, 0, 0, 0;
 
-    // 2. 제너레이터 초기화
     TrajGenerator traj_gen;
     traj_gen.initialize(model, q_start, angles_t::Zero(), angles_t::Zero());
 
-    // 3. 디버깅용 CSV 설정 (모든 조인트 컬럼 추가)
-    std::ofstream csv("trapj_bench_data.csv");
-    csv << "Time,Step,J1,J2,J3,J4,J5,J6,Q_Error,Exec_us,Reached\n";
+    // 2. CSV 파일 생성 및 헤더 작성
+    std::ofstream csv("joint_dynamics_test.csv");
+    csv << "Time,Step";
+    for(int i=1; i<=6; ++i) {
+        csv << ",J" << i << "_Pos,J" << i << "_Vel,J" << i << "_Acc";
+    }
+    csv << ",Q_Error_Norm\n";
 
-    double dt = 0.001; 
+    double dt = 0.001; // 1ms 제어 주기
     double current_time = 0.0;
     std::vector<angles_t> test_goals = {q_target1, q_target2, q_target3};
-    
-    std::vector<double> exec_times; 
-    
-    std::cout << "===== 🚀 1000Hz Loop & All-Joint Monitoring Benchmarking =====" << std::endl;
-    std::cout << "Target Frequency: 1000 Hz (Cycle: 1000 us)" << std::endl;
+
+    std::cout << "===== 🚀 Dynamic Trajectory Logging Start =====" << std::endl;
 
     for (size_t i = 0; i < test_goals.size(); ++i) {
-        (void)traj_gen.trapj(test_goals[i]);
+        traj_gen.trapj(test_goals[i]);
+        std::cout << "[Step " << i + 1 << "] Target: " << test_goals[i].transpose() << std::endl;
 
-        std::cout << "\n[Step " << i + 1 << "] 기동 시작 -> Target: " << test_goals[i].transpose() << std::endl;
-        
-        double step_start_time = current_time;
-        int loop_count = 0;
-
+        // goal_reached 판정 기준 (각도 오차 0.05도 이하 등)
         while (!traj_gen.goal_reached(0.05, std::nullopt, std::nullopt, 0.1)) {
-            auto start_tick = std::chrono::high_resolution_clock::now();
-
+            // 궤적 업데이트 (내부적으로 m_angles, m_angvels, m_angaccs 갱신)
             traj_gen.update(dt); 
 
-            auto end_tick = std::chrono::high_resolution_clock::now();
-            double elapsed_us = std::chrono::duration<double, std::micro>(end_tick - start_tick).count();
-            
-            exec_times.push_back(elapsed_us);
-            
-            // 데이터 확보
-            angles_t cur_q = traj_gen.angles();
+            // 데이터 수집
+            const auto& q = traj_gen.angles();
+            const auto& dq = traj_gen.angvels();
+            const auto& ddq = traj_gen.angaccs();
             double q_err = traj_gen.angles_enorm().value_or(0.0);
 
-            // CSV 기록 (모든 조인트 각도 기록)
-            csv << std::fixed << std::setprecision(4) << current_time << "," << i + 1 << ",";
-            for(int j=0; j<6; ++j) csv << cur_q(j) << ",";
-            csv << q_err << "," << elapsed_us << "," << (traj_gen.goal_reached() ? 1 : 0) << "\n";
-            
-            // 500ms마다 실시간 모니터링 출력
-            if (loop_count % 200 == 0) {
-                std::cout << "[RUN] T: " << std::fixed << std::setprecision(3) << current_time << "s | ";
-                std::cout << "Q: [";
-                for(int j=0; j<6; ++j) {
-                    std::cout << std::setw(7) << std::fixed << std::setprecision(2) << cur_q(j) << (j==5 ? "" : ", ");
-                }
-                std::cout << "] | Err: " << std::setprecision(3) << q_err 
-                          << " | Exec: " << std::setw(5) << (int)elapsed_us << " us" << std::endl;
+            // CSV 기록
+            csv << std::fixed << std::setprecision(5) << current_time << "," << i + 1;
+            for(int j=0; j<6; ++j) {
+                csv << "," << q(j) << "," << dq(j) << "," << ddq(j);
             }
+            csv << "," << q_err << "\n";
 
             current_time += dt;
-            loop_count++;
-            
-            if (current_time - step_start_time > 10.0) break;
-        }
 
-        // 성능 통계
-        if (!exec_times.empty()) {
-            double sum = std::accumulate(exec_times.begin(), exec_times.end(), 0.0);
-            double avg = sum / exec_times.size();
-            double max_t = *std::max_element(exec_times.begin(), exec_times.end());
-            
-            std::cout << "--------------------------------------------------------------------------------" << std::endl;
-            std::cout << "✅ Step " << i + 1 << " Done. (Final Q: " << traj_gen.angles().transpose() << ")" << std::endl;
-            std::cout << "📊 Stats: Avg Exec: " << std::fixed << std::setprecision(2) << avg 
-                      << " us | Max: " << max_t << " us | Margin: " << (1.0 - avg/1000.0)*100.0 << " %" << std::endl;
-            std::cout << "--------------------------------------------------------------------------------" << std::endl;
+            // 안전 타임아웃
+            if (current_time > 30.0) break; 
         }
-        exec_times.clear();
         
-        for(int j=0; j<200; ++j) { traj_gen.update(dt); current_time += dt; }
+        // 스텝 완료 후 약간의 휴지기 (안정화 데이터 수집)
+        for(int j=0; j<100; ++j) {
+            traj_gen.update(dt);
+            current_time += dt;
+        }
     }
 
     csv.close();
-    std::cout << "\n🏁 Benchmarking Finished. Data saved to 'trapj_bench_data.csv'" << std::endl;
+    std::cout << "🏁 Logging Finished. 'joint_dynamics_test.csv' saved." << std::endl;
     return 0;
 }

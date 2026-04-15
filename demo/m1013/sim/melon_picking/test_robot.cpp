@@ -3,8 +3,6 @@
 #include <iomanip>
 #include <vector>
 #include <string>
-#include <chrono>
-#include <optional>
 #include "../../../../rt_control/model/model.hpp"
 #include "../../../../rt_control/trajectory/trajectory_generator.hpp"
 
@@ -12,96 +10,94 @@ using namespace rt_control;
 using namespace rt_control::trajectory;
 
 int main() {
+    // 1. 모델 및 제너레이터 초기화
     rt_control::model::RobotModel model("m1013");
     TrajGenerator traj_gen;
-
-    // 초기화
     traj_gen.initialize(model, angles_t::Zero(), angles_t::Zero(), angles_t::Zero());
 
-    // 🌟 물리 로봇 테스트와 완벽히 동일한 TCP 설정
-    traj_gen.set_tcp(-0.1219, -0.1219, 0.26611, 60.0, 0.0, -45.0);
+    // 실제 물리 로봇 TCP 설정 (동일하게 유지)
+    traj_gen.set_tcp(-0.029, 0.0, -0.3819, 0.0, 0.0, 0.0);
 
-    // 🌟 속도(V), 가속도(A) 발산을 보기 위해 컬럼 대폭 추가
-    std::ofstream csv("generator_diagnosis_log.csv");
-    csv << "Time,StepInfo,"
-        << "J1,J2,J3,J4,J5,J6,"
-        << "V1,V2,V3,V4,V5,V6,"
-        << "A1,A2,A3,A4,A5,A6,"
-        << "TCP_X,TCP_Y,TCP_Z\n";
+    // 2. CSV 헤더 확장 (J1~J6 모든 데이터 포함)
+    std::ofstream csv("full_picking_log.csv");
+    csv << "Time,Step";
+    for(int i=1; i<=6; ++i) csv << ",J" << i << "_p"; // Positions
+    for(int i=1; i<=6; ++i) csv << ",J" << i << "_v"; // Velocities
+    for(int i=1; i<=6; ++i) csv << ",J" << i << "_a"; // Accelerations
+    csv << ",TCP_X,TCP_Y,TCP_Z\n";
 
-    double dt = 0.001; // 1ms 주기
+    double dt = 0.001;
     double current_time = 0.0;
-    
-    // 람다 함수: 제너레이터 업데이트 및 기록
-    auto run_sim = [&](const std::string& step_info, double timeout = 10.0) {
-        int loop_count = 0;
+
+    // --- 실행 및 전체 로깅용 람다 함수 ---
+    auto execute_motion = [&](const std::string& step_name, double timeout = 10.0) {
+        int loop_cnt = 0;
+        double start_step_time = current_time;
         
-        while (!traj_gen.goal_reached(0.001, 0.01, 1.0, std::nullopt, std::nullopt, std::nullopt)) {
-            traj_gen.update(dt); 
+        // 도달 판정: 위치(1mm), 각도(0.1도), 속도(0.5deg/s) 기준
+        while (!traj_gen.goal_reached(0.1, 0.001, 1.0, 0.5)) {
+            traj_gen.update(dt);
             
-            angles_t cur_q = traj_gen.angles();
-            angles_t cur_v = traj_gen.angvels(); // 각속도
-            angles_t cur_a = traj_gen.angaccs(); // 각가속도
-            Eigen::Isometry3d cur_tcp = traj_gen.tmat();
-
-            // 10ms에 한 번씩만 출력 (터미널 버벅임 방지)
-            if (loop_count % 10 == 0) {
-                csv << std::fixed << std::setprecision(5) << current_time << "," << step_info << ",";
-                for(int j=0; j<6; ++j) csv << cur_q(j) << ",";
-                for(int j=0; j<6; ++j) csv << cur_v(j) << ",";
-                for(int j=0; j<6; ++j) csv << cur_a(j) << ",";
-                csv << cur_tcp.translation().x() << "," << cur_tcp.translation().y() << "," << cur_tcp.translation().z() << "\n";
+            // 10ms 주기로 CSV 기록 (데이터 해상도 유지)
+            if (loop_cnt % 10 == 0) {
+                csv << std::fixed << std::setprecision(5) << current_time << "," << step_name;
+                
+                // J1 ~ J6 모든 데이터 기록
+                for(int j=0; j<6; ++j) csv << "," << traj_gen.angles()(j);
+                for(int j=0; j<6; ++j) csv << "," << traj_gen.angvels()(j);
+                for(int j=0; j<6; ++j) csv << "," << traj_gen.angaccs()(j);
+                
+                // TCP 좌표
+                auto pos = traj_gen.tmat().translation();
+                csv << "," << pos.x() << "," << pos.y() << "," << pos.z() << "\n";
             }
-
+            
             current_time += dt;
-            loop_count++;
-            
-            // 시뮬레이션 타임아웃 (무한루프 방지)
-            if ((current_time) > timeout) {
-                std::cout << "⚠️ [" << step_info << "] 타임아웃 발생!" << std::endl;
-                break;
-            }
+            loop_cnt++;
+            if (current_time - start_step_time > timeout) break;
         }
-        std::cout << "✅ [" << step_info << "] 도달 완료. (소요 시간: " << current_time << "s)" << std::endl;
-        
-        // 동작 끝난 후 0.2초 안정화 (실제 로봇과 유사하게)
-        for(int j=0; j<200; ++j) { traj_gen.update(dt); current_time += dt; }
+
+        // 🌟 모드 전환 전 정적 안정화 (E-Stop 방지 핵심)
+        traj_gen.stop();
+        for(int j=0; j<300; ++j) {
+            traj_gen.update(dt);
+            current_time += dt;
+        }
+        std::cout << ">> Completed: " << step_name << std::endl;
     };
 
-    std::cout << "🚀 진단용 시뮬레이션 시작..." << std::endl;
+    // --- 시나리오 좌표 설정 ---
+    angles_t q_home; q_home << -90, 0, -90, 0, -90, 90;
+    double pick_x = 0.0, pick_y = 1.1, pick_z = 0.045;
+    double place_x = 0.0, place_y = 0.5, place_z = 0.045;
 
-    // [Step 1] 초기 자세 (TrapJ)
-    angles_t q_start = angles_t::Zero();
-    q_start(0) = -90.0;
-    q_start(2) = -90.0; 
-    q_start(4) = -90.0;
-    (void)traj_gen.trapj(q_start);
-    run_sim("1_TrapJ_Init", current_time + 10.0);
+    std::cout << "🚀 Full Dynamic Picking Cycle Simulation Start..." << std::endl;
 
-    // [Step 2] 바닥 정렬
-    (void)traj_gen.align_tcp_to_floor(90.0, 100.0);
-    run_sim("2_Align_Floor", current_time + 10.0);
+    // [Step 1] Home 이동
+    (void)traj_gen.trapj(q_home);
+    execute_motion("1_Go_Home");
 
-    // [Step 3] 문제의 좌표로 접근 (Z + 0.05m)
-    double target_x = 0.0, target_y = 1.1, target_z = 0.045;
-    
-    Eigen::Isometry3d step3_target = traj_gen.tmat();
-    step3_target.translation() << target_x, target_y, target_z + 0.05;
-    
-    std::cout << "▶ [접근] 목표 지점으로 Attrl 제어 시작..." << std::endl;
-    // 💡 문제가 생겼던 150.0 게인 그대로 시뮬레이션
-    (void)traj_gen.attrl(step3_target, 150.0); 
-    run_sim("3_Approach", current_time + 10.0);
+    // [Step 2] Picking 접근
+    Eigen::Isometry3d target = traj_gen.tmat();
+    target.translation() << pick_x, pick_y, pick_z + 0.1;
+    (void)traj_gen.attrl(target, 100.0);
+    execute_motion("2_Approach_Pick");
 
-    // [Step 4] 하강
-    Eigen::Isometry3d step4_target = traj_gen.tmat();
-    step4_target.translation() << target_x, target_y, target_z;
-    
-    std::cout << "▶ [하강] 바닥으로 Attrl 제어 시작..." << std::endl;
-    (void)traj_gen.attrl(step4_target, 150.0);
-    run_sim("4_Reach", current_time + 10.0);
+    // [Step 3] Picking 하강
+    target.translation() << pick_x, pick_y, pick_z;
+    (void)traj_gen.attrl(target, 80.0);
+    execute_motion("3_Picking");
+
+    // [Step 4] Placing 위치 이동
+    target.translation() << place_x, place_y, place_z;
+    (void)traj_gen.attrl(target, 100.0);
+    execute_motion("4_Moving_to_Place");
+
+    // [Step 5] Home 복귀 (Attrl -> TrapJ 전환점)
+    (void)traj_gen.trapj(q_home);
+    execute_motion("5_Return_Home");
 
     csv.close();
-    std::cout << "🏁 시뮬레이션 완료. 'generator_diagnosis_log.csv' 파일을 확인하세요." << std::endl;
+    std::cout << "🏁 Logged to 'full_picking_log.csv'." << std::endl;
     return 0;
 }

@@ -1,50 +1,50 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import os
 
-def plot_trapj_results(file_path):
-    # 데이터 로드
-    if not os.path.exists(file_path):
-        print(f"Error: {file_path} 파일을 찾을 수 없습니다.")
-        return
+# 1. 데이터 불러오기
+file_path = 'joint_dynamics_test.csv'  # 생성된 CSV 파일명
+try:
+    df = pd.read_csv(file_path)
+except FileNotFoundError:
+    print(f"Error: {file_path} 파일을 찾을 수 없습니다. C++ 프로그램을 먼저 실행하세요.")
+    exit()
 
-    print(f"Plotting results from {file_path}...")
-    data = pd.read_csv(file_path)
+# 2. 그래프 설정 (3행 1열 구조: 위치, 속도, 가속도)
+fig, axes = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
+plt.subplots_adjust(hspace=0.3)
 
-    # 6개 관절 그래프 생성
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10), sharex=True)
-    fig.suptitle('Multi-Joint Trapezoidal Trajectory (TrapJ)', fontsize=16)
+joints = [f'J{i}' for i in range(1, 7)]
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
 
-    joint_names = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
-    colors = ['blue', 'green', 'red', 'cyan', 'magenta', 'orange']
+# --- (1) Position Plot ---
+for i, joint in enumerate(joints):
+    axes[0].plot(df['Time'], df[f'{joint}_Pos'], label=f'{joint}', color=colors[i], linewidth=1.5)
+axes[0].set_ylabel('Position (deg)', fontsize=12)
+axes[0].set_title('Joint Positions', fontsize=14, fontweight='bold')
+axes[0].legend(loc='upper right', ncol=3)
+axes[0].grid(True, linestyle='--', alpha=0.7)
 
-    for i, (ax, name, color) in enumerate(zip(axes.flatten(), joint_names, colors)):
-        ax.plot(data['Time'], data[f'{name}_Pos'], label=f'{name} Position', color=color, linewidth=2)
-        ax.set_ylabel('Angle [deg]')
-        ax.set_title(f'Joint {i+1} Movement')
-        ax.grid(True, linestyle='--', alpha=0.7)
-        ax.legend(loc='upper right')
+# --- (2) Velocity Plot ---
+for i, joint in enumerate(joints):
+    axes[1].plot(df['Time'], df[f'{joint}_Vel'], label=f'{joint}', color=colors[i], linewidth=1.5)
+axes[1].set_ylabel('Velocity (deg/s)', fontsize=12)
+axes[1].set_title('Joint Velocities (Trapezoidal Profile)', fontsize=14, fontweight='bold')
+axes[1].legend(loc='upper right', ncol=3)
+axes[1].grid(True, linestyle='--', alpha=0.7)
 
-    # X축 라벨 설정 (맨 아래 그래프)
-    axes[2, 0].set_xlabel('Time [s]')
-    axes[2, 1].set_xlabel('Time [s]')
+# --- (3) Acceleration Plot ---
+for i, joint in enumerate(joints):
+    axes[2].plot(df['Time'], df[f'{joint}_Acc'], label=f'{joint}', color=colors[i], linewidth=1.2, alpha=0.8)
+axes[2].set_ylabel('Acceleration (deg/s²)', fontsize=12)
+axes[2].set_xlabel('Time (sec)', fontsize=12)
+axes[2].set_title('Joint Accelerations', fontsize=14, fontweight='bold')
+axes[2].legend(loc='upper right', ncol=3)
+axes[2].grid(True, linestyle='--', alpha=0.7)
 
-    # 도달 시점 표시 (Reached == 1)
-    reached_points = data[data['Reached'] == 1]['Time']
-    if not reached_points.empty:
-        # 연속된 Reached 구간 중 첫 번째 시점들만 표시
-        diff = reached_points.diff()
-        start_reached = reached_points[diff > 0.1] # 100ms 이상 간격 차이 날 때
-        if len(start_reached) == 0 and len(reached_points) > 0:
-            start_reached = [reached_points.iloc[0]]
-            
-        for t in start_reached:
-            for ax in axes.flatten():
-                ax.axvline(x=t, color='black', linestyle=':', alpha=0.5)
+# 결과 출력
+print(f"Plotting data from {len(df)} samples...")
+plt.suptitle(f'Robot Joint Dynamics Analysis ({file_path})', fontsize=16, y=0.95)
+plt.show()
 
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9) # 제목 공간 확보
-    plt.show()
-
-if __name__ == "__main__":
-    plot_trapj_results('trapj_debug_data.csv')
+# (선택 사항) 이미지로 저장하고 싶을 경우 아래 주석 해제
+# plt.savefig('trajectory_plot.png', dpi=300)

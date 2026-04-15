@@ -38,7 +38,7 @@ int main() {
     double total_time = 0.0;
 
     // =========================================================================
-    // 🌟 모듈 1: 목표 도달 대기 (순수 모니터링)
+    // 🌟 모듈 1: 목표 도달 대기 (순수 모니터링 + 알람 체크)
     // =========================================================================
     auto wait_goal = [&](const std::string& info, 
                          double p_th = 0.02,  
@@ -48,6 +48,12 @@ int main() {
         double start_time = total_time;
         
         while (keep_running) {
+            // 🚨 [추가] 실시간 루프 도중 알람이 발생했는지 감지
+            if (robot.has_alarm()) {
+                std::cerr << "❌ [Main Loop] 로봇에 알람이 발생하여 '" << info << "' 동작 대기를 중단합니다." << std::endl;
+                return false; 
+            }
+
             bool reached = robot.get_goal_reached(std::nullopt, p_th, r_th);
             auto cur_q = robot.get_current_angles();
             
@@ -89,11 +95,10 @@ int main() {
     };
 
     // =========================================================================
-    // 🌟 모듈 2: 동작 실행 래퍼 (행렬 대신 X,Y,Z,R,P,Y 직접 입력)
+    // 🌟 모듈 2: 동작 실행 래퍼
     // =========================================================================
     auto execute_move = [&](double x, double y, double z, double r, double p, double yaw, const std::string& step_info) -> bool {
-        // 💡 Kp 값을 150.0에서 50.0으로 고정하여 과가속 발산 방지!
-        if (!robot.attrl(x, y, z, r, p, yaw, 150.0)) return false;
+        if (!robot.attrl(x, y, z, r, p, yaw, 50.0)) return false; // Kp 값을 낮게 설정 (과가속 방지)
         return wait_goal(step_info, 0.01, 1.0, 100.0);
     };
 
@@ -120,7 +125,6 @@ int main() {
         if (robot.trapj(q_pose)) wait_goal("2_Setup_TrapJ");
 
         std::cout << "\n3️⃣ [Align] 툴 팁을 바닥(-Z) 방향으로 정렬합니다..." << std::endl;
-        // 💡 특이점(Singularity) 회피를 위해 Yaw 각도를 180도가 아닌 90도로 정렬
         if (robot.align_tcp_to_floor(90.0, 100.0)) {
             wait_goal("3_Align_Vertical_Fixed_Flange", 0.01, 0.5, 100.0);
         }
@@ -131,12 +135,20 @@ int main() {
         std::cout << "▶ 종료하려면 'q'를 입력하세요." << std::endl;
         std::cout << "==========================================================\n" << std::endl;
         
-        // 🌟 절대 자세 설정: 툴 끝이 바닥을 보게 하되, 특이점 회피를 위해 Yaw를 90도로 세팅
         const double target_r = 180.0;
         const double target_p = 0.0;
         const double target_yaw = 90.0;
 
         while (keep_running) {
+            // 🚨 [추가] 새로운 동작 시작 전 알람 상태 체크 및 클리어
+            if (robot.has_alarm()) {
+                std::cout << "\n⚠️ 로봇 알람이 감지되었습니다! 티치펜던트(TP)에서 알람을 해제한 후 'Enter'를 누르세요..." << std::endl;
+                std::cin.ignore(10000, '\n'); // 이전 버퍼 비우기
+                std::cin.get(); // 대기
+                robot.clear_alarm_flag(); // 알람 플래그 초기화
+                std::cout << "✅ 알람 플래그를 초기화했습니다. 다시 시작합니다.\n" << std::endl;
+            }
+
             // ---------------------------------------------------------
             // [Phase 1] PICK (집기) 파트
             // ---------------------------------------------------------
@@ -156,25 +168,20 @@ int main() {
                 continue;
             }
 
-            std::cout << "\n   🚀 [Pick 시퀀스 시작] 목표: [" << pick_x << ", " << pick_y << ", " << pick_z << "]" << std::endl;
+            std::cout << "\n  🚀 [Pick 시퀀스 시작] 목표: [" << pick_x << ", " << pick_y << ", " << pick_z << "]" << std::endl;
 
-            // 1. Pick 접근 (Z + 0.05m)
-            std::cout << "\n   ▶ [Step 1] Pick 상단 5cm 위치로 접근 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 1] Pick 상단 5cm 위치로 접근 중..." << std::endl;
             if (!execute_move(pick_x, pick_y, pick_z + 0.05, target_r, target_p, target_yaw, "Pick_Approach")) continue;
 
-            // 2. Pick 하강 (Z)
-            std::cout << "\n   ▶ [Step 2] Pick 지점으로 수직 하강 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 2] Pick 지점으로 수직 하강 중..." << std::endl;
             if (!execute_move(pick_x, pick_y, pick_z, target_r, target_p, target_yaw, "Pick_Reach")) continue;
 
-            // 💡 [I/O ON] 물건 잡기
-            std::cout << "\n   🧲 [I/O 제어] 그리퍼 작동 (ON)" << std::endl;
+            std::cout << "\n  🧲 [I/O 제어] 그리퍼 작동 (ON)" << std::endl;
             robot.set_digital_output(9, true);
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 흡착 대기
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-            // 3. Pick 상승 (Z + 0.10m)
-            std::cout << "\n   ▶ [Step 3] 10cm 위로 수직 상승 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 3] 10cm 위로 수직 상승 중..." << std::endl;
             if (!execute_move(pick_x, pick_y, pick_z + 0.10, target_r, target_p, target_yaw, "Pick_Retract")) continue;
-
 
             // ---------------------------------------------------------
             // [Phase 2] PLACE (놓기) 파트
@@ -194,26 +201,22 @@ int main() {
                 continue;
             }
 
-            std::cout << "\n   🚀 [Place 시퀀스 시작] 목표: [" << place_x << ", " << place_y << ", " << place_z << "]" << std::endl;
+            std::cout << "\n  🚀 [Place 시퀀스 시작] 목표: [" << place_x << ", " << place_y << ", " << place_z << "]" << std::endl;
 
-            // 4. Place 접근 (Z + 0.05m)
-            std::cout << "\n   ▶ [Step 4] Place 상단 5cm 위치로 접근 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 4] Place 상단 5cm 위치로 접근 중..." << std::endl;
             if (!execute_move(place_x, place_y, place_z + 0.05, target_r, target_p, target_yaw, "Place_Approach")) continue;
 
-            // 5. Place 하강 (Z)
-            std::cout << "\n   ▶ [Step 5] Place 지점으로 수직 하강 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 5] Place 지점으로 수직 하강 중..." << std::endl;
             if (!execute_move(place_x, place_y, place_z, target_r, target_p, target_yaw, "Place_Reach")) continue;
 
-            // 💡 [I/O OFF] 물건 놓기
-            std::cout << "\n   👐 [I/O 제어] 그리퍼 해제 (OFF)" << std::endl;
+            std::cout << "\n  👐 [I/O 제어] 그리퍼 해제 (OFF)" << std::endl;
             robot.set_digital_output(9, false);
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 떨어질 때까지 대기
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-            // 6. Place 상승 (Z + 0.10m)
-            std::cout << "\n   ▶ [Step 6] 10cm 위로 수직 상승 중..." << std::endl;
+            std::cout << "\n  ▶ [Step 6] 10cm 위로 수직 상승 중..." << std::endl;
             if (!execute_move(place_x, place_y, place_z + 0.10, target_r, target_p, target_yaw, "Place_Retract")) continue;
 
-            std::cout << "\n   🎉 1회 Pick & Place 완료!" << std::endl;
+            std::cout << "\n  🎉 1회 Pick & Place 완료!" << std::endl;
         }
 
     } catch (const std::exception& e) {
