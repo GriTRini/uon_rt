@@ -1,4 +1,4 @@
-import rt_py.trajectory as rc
+import trajectory as rc
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
