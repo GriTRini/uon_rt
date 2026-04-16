@@ -6,6 +6,7 @@
 #include <chrono>
 #include <functional>
 #include <atomic>
+#include <array>
 
 #include "core.hpp" 
 #include "../timer.hpp"
@@ -14,11 +15,20 @@
 
 namespace rt_control {
 
+// 🌟 공통 알람 구조체 (어떤 로봇이든 동일한 규격으로 에러를 반환)
+struct RobotAlarm {
+    std::chrono::system_clock::time_point time;
+    int level;
+    int group;
+    int index;
+    std::string param[3];
+};
+
 class RobotBase {
 public:
     using traj_gen_t = trajectory::TrajGenerator;
-    using angles_t = rt_control::angles_t; // 명시적 네임스페이스 (경고 해결)
-    using value_t = rt_control::value_t;   // 명시적 네임스페이스 (경고 해결)
+    using angles_t = rt_control::angles_t; 
+    using value_t = rt_control::value_t;   
     using tmat_t = Eigen::Isometry3d;
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
@@ -38,24 +48,20 @@ public:
     }
 
     // ==============================================================
-    // 🌟 공통 수학 및 기구학 API (자식 클래스들이 모두 물려받음)
+    // 🌟 공통 수학 및 기구학 API
     // ==============================================================
     void set_tcp(value_t x, value_t y, value_t z, value_t r_deg, value_t p_deg, value_t yaw_deg) noexcept {
         m_traj_gen.set_tcp(x, y, z, r_deg, p_deg, yaw_deg);
     }
 
-    // 현재 TCP 포즈 
     [[nodiscard]] const tmat_t& get_current_pos() const noexcept { return m_traj_gen.tmat(); }
-    
-    // 🌟 신규 추가: 순수 로봇 손목(Flange) 포즈 반환
     [[nodiscard]] tmat_t get_current_flange_pos() const noexcept { return m_traj_gen.flange_tmat(); }
-
     [[nodiscard]] const jmat_t& get_jacobian() const noexcept { return m_traj_gen.jmat(); }
     [[nodiscard]] const a_t& get_task_vel() const noexcept { return m_traj_gen.a(); }
     [[nodiscard]] tmat_t solve_forward(const angles_t& q) const noexcept { return m_traj_gen.solve_forward(q); }
 
     // ==============================================================
-    // 🌟 공통 궤적 제어 API (자식 클래스들이 모두 물려받음)
+    // 🌟 공통 궤적 제어 API
     // ==============================================================
     void stop() noexcept { m_traj_gen.stop(); }
 
@@ -76,7 +82,6 @@ public:
         return m_traj_gen.attrl(x, y, z, r_deg, p_deg, yaw_deg, kp);
     }
 
-    // 🌟 TCP 정렬 API (제조사 상관없이 Generator에서 계산)
     [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, value_t kp = 100.0) noexcept {
         if (!m_update_timer.is_running()) return false;
         return m_traj_gen.align_tcp_to_floor(yaw_deg, kp);
@@ -94,11 +99,11 @@ public:
     }
 
     // ==============================================================
-    // 🔌 하드웨어 종속 API (자식 클래스인 dsr_robot 등이 오버라이딩함)
+    // 🔌 하드웨어 종속 API (모든 로봇 클래스가 강제로 구현해야 함)
     // ==============================================================
-    virtual bool open_connection(const std::string &strIpAddr = "192.168.1.30", const uint32_t usPort = 12345) = 0;
+    virtual bool open_connection(const std::string &strIpAddr = "", const uint32_t usPort = 0) = 0;
     virtual bool close_connection() = 0;
-    virtual bool connect_rt(const std::string &strIpAddr = "192.168.1.30", const uint32_t usPort = 12347) = 0;
+    virtual bool connect_rt(const std::string &strIpAddr = "", const uint32_t usPort = 0) = 0;
     virtual void disconnect_rt() = 0;
     
     virtual bool servo_on() = 0;
@@ -108,8 +113,18 @@ public:
     virtual std::optional<angles_t> get_current_angvels() const noexcept = 0;
     virtual void set_digital_output(int index, bool value) = 0;
 
+    // 🌟 신규 추가: 알람(에러) 획득
+    virtual std::optional<RobotAlarm> pop_alarm() noexcept = 0;
+
+    // 🌟 신규 추가: Tool 설정 (배열은 C API 호환을 위해 값 복사로 전달)
+    virtual bool add_tool(const std::string &name, float weight, 
+                          std::array<float, 3> cog, 
+                          std::array<float, 6> inertia) noexcept = 0;
+    virtual bool set_tool(const std::string &name) noexcept = 0;
+    virtual bool del_tool(const std::string &name) noexcept = 0;
+    virtual bool change_collision_sensitivity(const float fSensitivity) noexcept = 0;
+
 protected:
-    // 자식 클래스에서 실시간 통신 송수신을 구현할 함수
     virtual void update() = 0;
 
 protected:
