@@ -75,6 +75,8 @@ PYBIND11_MODULE(rt_bind, m) {
         .def("servo_off", &rt_control::RobotBase::servo_off)
         .def("set_digital_output", &rt_control::RobotBase::set_digital_output, 
              py::arg("index"), py::arg("value"))
+        .def("get_digital_input", &rt_control::RobotBase::get_digital_input,
+             py::arg("index"))
         
         // 설정
         .def("set_tcp", &rt_control::RobotBase::set_tcp,
@@ -115,10 +117,18 @@ PYBIND11_MODULE(rt_bind, m) {
         // 🌟 추가: 정면 정렬 바인딩
         .def("align_to_front", &rt_control::RobotBase::align_tcp_to_front, 
              py::arg("kp") = 100.0)
-        .def("goal_reached", [](rt_control::RobotBase& self, 
-                                std::optional<double> q_th, std::optional<double> p_th, std::optional<double> r_th) {
-            return self.get_goal_reached(q_th, p_th, r_th);
-        }, py::arg("q_th") = py::none(), py::arg("p_th") = py::none(), py::arg("r_th") = py::none())
+        // 🌟 물리적 안착(Settling)을 확인하는 goal_reached
+        .def("goal_reached", [](const rt_control::RobotBase& self, 
+                                std::optional<double> q_th, 
+                                std::optional<double> p_th, 
+                                std::optional<double> r_th,
+                                std::optional<double> v_th) {
+            return self.goal_reached(q_th, p_th, r_th, v_th);
+        }, 
+        py::arg("q_th") = py::none(), 
+        py::arg("p_th") = py::none(), 
+        py::arg("r_th") = py::none(),
+        py::arg("v_th") = py::none())
         
         // 🌟 추가: Forward Kinematics 바인딩
         .def("solve_forward", [](rt_control::RobotBase& self, const py::array_t<double>& q) {

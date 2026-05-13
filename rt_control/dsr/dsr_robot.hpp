@@ -211,6 +211,57 @@ public:
         draf::_set_digital_output(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index), value);
     }
 
+    bool get_digital_input(int index) override{
+        if (!m_control) return false;
+        // _ex 버전을 사용하거나 일반 버전을 사용합니다.
+        return draf::_get_digital_input_ex(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index));
+    }
+
+    // ==============================================================
+    // 🎯 물리적 로봇 안착(Settling) 확인 함수 (🌟 서명 일치화)
+    // ==============================================================
+    [[nodiscard]] bool goal_reached(
+        const std::optional<value_t> &q_th = 2.0, 
+        const std::optional<value_t> &p_th = 0.002, 
+        const std::optional<value_t> &r_th = 3.0,
+        const std::optional<value_t> &v_th = 1.0) const override { // <-- const와 override!
+        
+        // 1. 궤적 생성기(Trajectory Generator) 지령 완료 확인
+        if (!m_traj_gen.goal_reached(q_th, p_th, r_th, std::nullopt, std::nullopt, std::nullopt)) {
+            return false;
+        }
+
+        // 2. 물리적 로봇의 상태 가져오기
+        auto actual_q_opt = get_current_angles();
+        auto actual_dq_opt = get_current_angvels();
+
+        if (!actual_q_opt || !actual_dq_opt) {
+            return false;
+        }
+
+        const auto& actual_q = actual_q_opt.value();
+        const auto& actual_dq = actual_dq_opt.value();
+        const auto& target_q = m_traj_gen.angles();
+
+        // 3. 위치 오차 확인 (q_th)
+        if (q_th.has_value()) {
+            double q_error = (actual_q - target_q).norm();
+            if (q_error > q_th.value()) {
+                return false; 
+            }
+        }
+
+        // 4. 속도 오차 확인 (v_th) - 로봇이 완전히 멈췄는가?
+        if (v_th.has_value()) {
+            double v_error = actual_dq.norm();
+            if (v_error > v_th.value()) {
+                return false; 
+            }
+        }
+
+        return true;
+    }
+
     // ==============================================================
     // 🚨 알람(Error) 데이터 획득
     // ==============================================================

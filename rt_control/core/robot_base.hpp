@@ -92,10 +92,14 @@ public:
         return m_traj_gen.align_tcp_to_front(kp);
     }
 
-    [[nodiscard]] bool get_goal_reached(const std::optional<value_t> &q_th = std::nullopt,
-                                        const std::optional<value_t> &p_th = std::nullopt,
-                                        const std::optional<value_t> &r_th = std::nullopt) const noexcept {
-        return m_traj_gen.goal_reached(q_th, p_th, r_th, std::nullopt, std::nullopt, std::nullopt);
+    [[nodiscard]] virtual bool goal_reached(
+        const std::optional<value_t> &q_th = std::nullopt,
+        const std::optional<value_t> &p_th = std::nullopt,
+        const std::optional<value_t> &r_th = std::nullopt,
+        const std::optional<value_t> &v_th = std::nullopt) const {
+        
+        // (내부 로직은 원래 있던 코드를 유지하거나 비워둡니다)
+        return m_traj_gen.goal_reached(q_th, p_th, r_th, std::nullopt, std::nullopt, std::nullopt); 
     }
 
     // ==============================================================
@@ -112,6 +116,7 @@ public:
     virtual std::optional<angles_t> get_current_angles() const noexcept = 0;
     virtual std::optional<angles_t> get_current_angvels() const noexcept = 0;
     virtual void set_digital_output(int index, bool value) = 0;
+    [[nodiscard]] virtual bool get_digital_input (int index) = 0;
 
     // 🌟 신규 추가: 알람(에러) 획득
     virtual std::optional<RobotAlarm> pop_alarm() noexcept = 0;

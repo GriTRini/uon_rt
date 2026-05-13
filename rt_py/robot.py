@@ -51,6 +51,18 @@ class Robot(_rtb.RobotBase):
         """컨트롤 박스의 디지털 출력을 제어합니다."""
         super().set_digital_output(index, value)
 
+    def get_digital_input(self, index: int) -> bool:
+        """
+        컨트롤 박스의 디지털 입력(DI) 상태를 실시간으로 읽어옵니다.
+        
+        Args:
+            index: 확인할 DI 핀 번호
+            
+        Returns:
+            bool: 해당 핀의 상태 (True: On, False: Off)
+        """
+        return super().get_digital_input(index)
+
     # ==============================================================
     # 🔧 도구(Tool) 파라미터 및 안전 설정 API (🌟 신규 추가)
     # ==============================================================
@@ -134,9 +146,17 @@ class Robot(_rtb.RobotBase):
         """
         return super().solve_forward(q)
 
-    def goal_reached(self, q_th: float = 2.0, p_th: float = 0.002, r_th: float = 3.0) -> bool:
-        """로봇이 목표 지점에 도달했는지 확인합니다."""
-        return super().goal_reached(q_th, p_th, r_th)
+    def goal_reached(self, q_th: float = 2.0, p_th: float = 0.002, r_th: float = 3.0, v_th: float = 1.0) -> bool:
+        """
+        로봇이 목표 지점에 물리적으로 도달하고 완전히 안착(Settled)했는지 확인합니다.
+        
+        Args:
+            q_th: 관절 각도 오차 허용치 [deg]
+            p_th: Cartesian 위치 오차 허용치 [m]
+            r_th: Cartesian 회전 오차 허용치 [deg]
+            v_th: 관절 각속도 허용치 (0에 가까워야 함) [deg/s]
+        """
+        return super().goal_reached(q_th, p_th, r_th, v_th)
 
     # ==============================================================
     # 📊 상태 모니터링 API (Properties)
@@ -171,10 +191,3 @@ class Robot(_rtb.RobotBase):
     def task_vel(self) -> npt.NDArray[np.float64]:
         """현재 작업 공간(Task space) 속도 (6x1) (🌟 신규 추가)"""
         return super().task_vel
-
-    @property
-    def pos_enorm(self) -> float:
-        """현재 목표 위치와 실제 위치 사이의 거리 오차 [m]"""
-        # 참고: pos_enorm은 C++ RobotBase에 바인딩되어 있지 않다면 별도 구현이 필요할 수 있습니다. 
-        # C++ 코드에 포함되어 있다면 정상 작동합니다.
-        return super().pos_enorm
