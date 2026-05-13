@@ -1,45 +1,66 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # 3D 프로팅을 위한 모듈
+import numpy as np
 
-# 데이터 로드
-df = pd.read_csv('robot_dynamics_data.csv')
+def plot_robot_trajectory_3d(file_path="apple_pick_place_test.csv"):
+    try:
+        # 1. 데이터 읽기 및 정렬
+        df = pd.read_csv(file_path)
+        df = df.sort_values(by='Time').reset_index(drop=True)
+        print(f"✅ 데이터를 불러왔습니다. 총 {len(df)} 라인")
+    except Exception as e:
+        print(f"❌ 에러 발생: {e}")
+        return
 
-# 그래프 설정 (3행 1열: Position, Velocity, Acceleration)
-fig, axes = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
-plt.subplots_adjust(hspace=0.3)
+    # 2. 그래프 설정
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
 
-colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-labels = [f'J{i}' for i in range(1, 7)]
+    # 3. Mode별 색상 지정 (0: TrapJ, 1: Linear, 2: Wait)
+    # Mode에 따라 선의 색상을 다르게 그리면 궤적 분석이 더 쉽습니다.
+    modes = df['Mode'].unique()
+    # 0: 빨강(TrapJ), 1: 녹색(Linear), 2: 파랑(Wait) 등으로 매핑 가능
+    colors_map = {0: 'red', 1: 'green', 2: 'blue'}
+    labels_map = {0: 'TrapJ (Joint)', 1: 'Linear (Cartesian)', 2: 'Wait (Gripper)'}
 
-# 1. Position Plot
-for i in range(6):
-    axes[0].plot(df['Time'], df[f'J{i+1}_p'], color=colors[i], label=labels[i])
-axes[0].set_ylabel('Position (deg)')
-axes[0].set_title('Joint Positions')
-axes[0].grid(True, alpha=0.3)
-axes[0].legend(loc='upper right', ncol=3)
+    # 연속된 데이터를 Mode가 바뀔 때마다 나누어서 plot (색상 구분을 위해)
+    start_idx = 0
+    for i in range(1, len(df)):
+        if df['Mode'].iloc[i] != df['Mode'].iloc[start_idx] or i == len(df) - 1:
+            segment = df.iloc[start_idx:i+1]
+            current_mode = df['Mode'].iloc[start_idx]
+            
+            ax.plot(segment['X'], segment['Y'], segment['Z'], 
+                    color=colors_map.get(current_mode, 'black'), 
+                    linewidth=2, 
+                    alpha=0.8)
+            start_idx = i
 
-# 2. Velocity Plot
-for i in range(6):
-    axes[1].plot(df['Time'], df[f'J{i+1}_v'], color=colors[i], label=labels[i])
-axes[1].set_ylabel('Velocity (deg/s)')
-axes[1].set_title('Joint Velocities')
-axes[1].grid(True, alpha=0.3)
+    # 4. 시작점과 끝점 표시
+    ax.scatter(df['X'].iloc[0], df['Y'].iloc[0], df['Z'].iloc[0], color='black', s=100, label='START')
+    ax.scatter(df['X'].iloc[-1], df['Y'].iloc[-1], df['Z'].iloc[-1], color='magenta', s=100, marker='*', label='END')
 
-# 3. Acceleration Plot (Spike 확인용)
-for i in range(6):
-    axes[2].plot(df['Time'], df[f'J{i+1}_a'], color=colors[i], label=labels[i], alpha=0.7)
-axes[2].set_ylabel('Acceleration (deg/s²)')
-axes[2].set_xlabel('Time (sec)')
-axes[2].set_title('Joint Accelerations (Check for Discontinuity)')
-axes[2].grid(True, alpha=0.3)
+    # 5. 범례 추가 (중복 방지)
+    from matplotlib.lines import Line2D
+    legend_elements = [Line2D([0], [0], color='red', lw=2, label='TrapJ'),
+                       Line2D([0], [0], color='green', lw=2, label='Linear'),
+                       Line2D([0], [0], color='blue', lw=2, label='Wait'),
+                       Line2D([0], [0], color='black', marker='o', ls='', label='Start'),
+                       Line2D([0], [0], color='magenta', marker='*', ls='', label='End')]
+    ax.legend(handles=legend_elements)
 
-# Mode 영역 표시 (AttrL, Stop, TrapJ 구간 구분)
-for ax in axes:
-    # Mode 2 (Stabilization) 구간을 회색 배경으로 표시
-    stop_start = df[df['Mode'] == 2]['Time'].min()
-    stop_end = df[df['Mode'] == 2]['Time'].max()
-    ax.axvspan(stop_start, stop_end, color='gray', alpha=0.2, label='Stabilization')
+    # 6. 축 레이블 및 타이틀
+    ax.set_title('Robot TCP 3D Trajectory', fontsize=15)
+    ax.set_xlabel('X Axis (m)')
+    ax.set_ylabel('Y Axis (m)')
+    ax.set_zlabel('Z Axis (m)')
 
-plt.suptitle('Robot Joint Dynamics & Transition Analysis', fontsize=16)
-plt.show()
+    # 보기 좋은 각도로 설정
+    ax.view_init(elev=30, azim=45)
+    
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    plot_robot_trajectory_3d()
