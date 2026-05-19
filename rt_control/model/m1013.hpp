@@ -28,6 +28,8 @@ inline const std::array<Joint, 6> joints = {
     Joint{JointID::joint6, LinkID::link5, LinkID::link6, xyzrpy(0, -0.121, 0, M_PI_2, 0, 0), Eigen::Vector3d::UnitZ()}
 };
 
+inline constexpr double MAX_REACH = 1.05;
+
 } // namespace m1013
 } // namespace model
 } // namespace rt_control

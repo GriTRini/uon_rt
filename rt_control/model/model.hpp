@@ -35,14 +35,12 @@ inline Eigen::Isometry3d xyzrpy(double x, double y, double z, double r, double p
     return t;
 }
 
-// ==========================================
-// [로봇별 파라미터 로드]
-// ==========================================
 } // namespace model
 } // namespace rt_control
 
 #include "m1013.hpp"
 #include "hcr14.hpp"
+// 나중에 다른 로봇이 추가되면 여기에 #include "ur10.hpp" 등으로 추가
 
 namespace rt_control {
 namespace model {
@@ -55,7 +53,7 @@ public:
     using jacobian_t = Eigen::Matrix<double, 6, 6>;
 
 private:
-    std::string m_model_name = "none"; // 기본값 설정
+    std::string m_model_name = "none";
     angles_t m_min_angles = angles_t::Zero();
     angles_t m_max_angles = angles_t::Zero();
     angles_t m_min_angvels = angles_t::Zero();
@@ -64,17 +62,18 @@ private:
     angles_t m_max_angaccs = angles_t::Zero();
     std::array<Joint, 6> m_joints;
 
+    // 🌟 로봇의 진짜 최대 반경 변수
+    double m_max_reach = 0.0; 
+
 public:
     RobotModel() = default;
 
-    // 생성자에서 로드 실패 시 예외를 던짐
     explicit RobotModel(const std::string& model_name) {
         if (!load_model(model_name)) {
             throw std::runtime_error("[RobotModel Error] 지원하지 않는 모델명입니다: " + model_name);
         }
     }
 
-    // 반환 타입을 bool로 변경하여 성공 여부 확인 가능하게 함
     bool load_model(const std::string& model_name) {
         if (model_name == "m1013") {
             m_model_name = model_name;
@@ -85,6 +84,9 @@ public:
             m_min_angaccs = m1013::MAX_ANGACCS; 
             m_max_angaccs = m1013::MAX_ANGACCS;
             m_joints = m1013::joints;
+            
+            // 🌟 해당 로봇 고유의 최대 반경 로드
+            m_max_reach = m1013::MAX_REACH; 
             return true;
         } else if (model_name == "hcr14") {
             m_model_name = model_name;
@@ -95,10 +97,19 @@ public:
             m_min_angaccs = hcr14::MAX_ANGACCS; 
             m_max_angaccs = hcr14::MAX_ANGACCS;
             m_joints = hcr14::joints;
+            
+            // 🌟 해당 로봇 고유의 최대 반경 로드
+            m_max_reach = hcr14::MAX_REACH; 
             return true;
         }
+        
+        // [나중에 추가될 다른 모델 처리 예시]
+        // else if (model_name == "ur10") {
+        //     ...
+        //     m_max_reach = ur10::MAX_REACH;
+        //     return true;
+        // }
 
-        // 일치하는 모델이 없을 경우
         return false;
     }
 
@@ -111,6 +122,8 @@ public:
         return T;
     }
 
+    // 🌟 제어기가 호출할 Getter
+    [[nodiscard]] double get_max_reach() const noexcept { return m_max_reach; }
     [[nodiscard]] std::string get_model_name() const { return m_model_name; }
     [[nodiscard]] const std::array<Joint, 6>& get_joints() const { return m_joints; }
     [[nodiscard]] const angles_t& get_min_angles() const { return m_min_angles; }

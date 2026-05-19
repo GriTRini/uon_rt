@@ -1,0 +1,32 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
+
+project(CLINK_RPC_CLIENT_API_EXAMPLE)
+
+set(CMAKE_CXX_STANDARD 17)
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/../bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/../bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/../bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/../bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/../bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/../bin)
+
+include_directories(${CMAKE_SOURCE_DIR}/../../inc)
+link_directories(${CMAKE_SOURCE_DIR}/../../lib)
+link_libraries(clink_api_rpc_client)
+
+add_subdirectory(example001_move_joint)
+add_subdirectory(example002_move_linear)
+add_subdirectory(example003_move_circle)
+add_subdirectory(example004_move_arc)
+add_subdirectory(example005_move_circular)
+add_subdirectory(example006_pause_resume)
+add_subdirectory(example007_stop)
+add_subdirectory(example008_joint_jog)
+add_subdirectory(example009_linear_jog)
+add_subdirectory(example010_external_control)
+add_subdirectory(example011_weaving_motion)
+add_subdirectory(example012_velocity_control)
+#add_subdirectory(example013_user_move)
+add_subdirectory(example014_joint_angle_control)

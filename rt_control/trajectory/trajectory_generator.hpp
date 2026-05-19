@@ -181,14 +181,24 @@ class TrajGenerator {
     // ---------------------------------------------------------------------
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &kp = 50.0) noexcept {
         m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
-        m_gen_attrl.set_goal_pose(goal_tmat);
+        
+        // 🌟 [안전 로직 추가] 하위 제어기에서 물리적 한계를 검증한 결과를 받습니다.
+        bool is_valid_target = m_gen_attrl.set_goal_pose(goal_tmat);
+        
+        if (!is_valid_target) {
+            // 한계를 벗어난 명령이므로 상태(m_traj_state)를 ATTRL로 변경하지 않고 명령을 즉시 거부(Reject)합니다.
+            // std::cerr << "🚨 [Generator] ATTRL Command Rejected: Out of Reach!" << std::endl;
+            return false;
+        }
+
+        // 검증을 통과한 경우에만 제어 게인을 설정하고 모드를 전환합니다.
         m_gen_attrl.set_kp(kp);
         m_traj_state = traj_state_t::ATTRL;
         return true;
     }
 
     // ---------------------------------------------------------------------
-    // 🌟 추가된 함수 2: x, y, z (m) 와 r, p, yaw (deg) 를 받는 attrl
+    // 기존 함수 2: x, y, z (m) 와 r, p, yaw (deg) 를 받는 attrl
     // ---------------------------------------------------------------------
     [[nodiscard]] bool attrl(const value_t x, const value_t y, const value_t z, 
                              const value_t r_deg, const value_t p_deg, const value_t yaw_deg, 
@@ -212,7 +222,17 @@ class TrajGenerator {
 
         // 5. 계산된 행렬을 바탕으로 TrajAttrL 제어기 초기화
         m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
-        m_gen_attrl.set_goal_pose(goal_tmat);
+        
+        // 🌟 [안전 로직 추가] 생성된 포즈가 로봇의 가용 반경 내에 있는지 확인
+        bool is_valid_target = m_gen_attrl.set_goal_pose(goal_tmat);
+
+        if (!is_valid_target) {
+            // 한계 초과 시 즉시 거부
+            // std::cerr << "🚨 [Generator] ATTRL Command Rejected: XYZ Out of Reach!" << std::endl;
+            return false;
+        }
+
+        // 검증 통과 시 초기화 완료 및 모드 전환
         m_gen_attrl.set_kp(kp);
         m_traj_state = traj_state_t::ATTRL;
         return true;

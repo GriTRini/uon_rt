@@ -7,7 +7,7 @@
 
 #include "robot_base.hpp"
 #include "../dsr/dsr_robot.hpp"
-// #include "../hcr/hcr_robot.hpp" // 추후 한화 로봇 구현 시 주석 해제
+#include "../hcr/hcr_robot.hpp"
 
 namespace rt_control {
 

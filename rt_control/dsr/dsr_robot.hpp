@@ -214,7 +214,7 @@ public:
     bool get_digital_input(int index) override{
         if (!m_control) return false;
         // _ex 버전을 사용하거나 일반 버전을 사용합니다.
-        return draf::_get_digital_input_ex(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index));
+        return draf::_get_digital_input(m_control, static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(index));
     }
 
     // ==============================================================
