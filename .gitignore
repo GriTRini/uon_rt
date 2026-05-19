@@ -9,6 +9,7 @@ test_sequence
 generate_rect_data
 main_square
 test_sequence_tmat
+test_robot
 
 # Build and IDE
 build/

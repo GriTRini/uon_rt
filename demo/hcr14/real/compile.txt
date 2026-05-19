@@ -1,0 +1,8 @@
+g++ -std=c++20 -O3 test_robot.cpp -o test_robot \
+-I/home/uon/seonghyeon/uon_rt \
+-I/usr/include/eigen3 \
+-I/home/uon/seonghyeon/uon_rt/hcr/include \
+-L/home/uon/seonghyeon/uon_rt/hcr/lib \
+-L/home/uon/seonghyeon/uon_rt/hcr/lib/kinematics \
+-lclink_api_rpc_client -lkinematics_hcr_3gen -lpthread -lrt -ldl \
+-Wl,-rpath=/home/uon/seonghyeon/uon_rt/hcr/lib:/home/uon/seonghyeon/uon_rt/hcr/lib/kinematics
