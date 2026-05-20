@@ -314,7 +314,6 @@ protected:
 
             next_target[i] = static_cast<clink_float_t>(cmd_joint[i]);
         }
-        std::cout << "[Debug] J1 cmd: " << next_target[0] << " | Current J1: " << get_current_angles().value()(0) << std::endl;
         // 조인트 체이서 명령 전송
         clink_rpc_robot_joint_chaser_move(cbox_id, robot_id, 6, next_target);
     }
