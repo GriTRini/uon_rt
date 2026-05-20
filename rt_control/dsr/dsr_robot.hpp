@@ -297,7 +297,6 @@ protected:
             q_d1[i] = static_cast<float>(des_dq(i));
             q_d2[i] = static_cast<float>(des_ddq(i));
         }
-        
         draf::_servoj_rt(m_control_rt, q, q_d1, q_d2, m_servoj_target_time);
     }
 

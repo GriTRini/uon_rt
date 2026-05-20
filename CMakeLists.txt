@@ -36,11 +36,17 @@ include_directories(
     ${HCR_SDK_INC}
 )
 
-# 5. 컴파일 옵션
+# 5. 컴파일 옵션 및 링커 플래그 설정
 if(NOT MSVC)
     add_definitions(-march=native)
     add_definitions(-DEIGEN_MAX_ALIGN_BYTES=32)
     add_definitions(-D_REENTRANT)
+    
+    # 👇 [추가] C++ 코드에 HCR SDK의 절대 경로를 넘겨줍니다.
+    add_definitions(-DHANWHA_ROOT_PATH="${HCR_SDK_DIR}")
+    
+    # 🌟 [추가] 중요: RUNPATH 대신 강제로 전통적인 RPATH를 사용하도록 설정합니다.
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
 endif()
 
 # 6. 파이썬 모듈 빌드
@@ -72,7 +78,11 @@ target_link_libraries(rt_bind PRIVATE
 )
 
 # 9. RPATH 설정 (런타임에 모든 .so 파일을 찾을 수 있도록)
-# 빌드된 .so가 실행될 때 라이브러리 위치를 스스로 찾게 합니다.
+# 🌟 [수정 및 강화] 빌드 트리와 인스톨 트리 모두에서 RPATH가 완전 고정되도록 환경 플래그를 추가로 명시합니다.
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_敵RPATH_USE_LINK_PATH TRUE)
+
 set_target_properties(rt_bind PROPERTIES
     INSTALL_RPATH "${DSR_LIB_PATH};${HCR_LIB_PATH};${HCR_KINE_LIB_PATH}" 
     BUILD_WITH_INSTALL_RPATH TRUE

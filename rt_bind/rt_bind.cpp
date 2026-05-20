@@ -65,6 +65,7 @@ PYBIND11_MODULE(rt_bind, m) {
         .def("open_connection", &rt_control::RobotBase::open_connection, 
              py::arg("ip") = "", py::arg("port") = 0) // 기본값을 Base 선언에 맞춤
         .def("close_connection", &rt_control::RobotBase::close_connection)
+        .def("close_connection", &rt_control::RobotBase::close_connection)
         .def("connect_rt", &rt_control::RobotBase::connect_rt, 
              py::arg("ip") = "", py::arg("port") = 0)
         .def("disconnect_rt", &rt_control::RobotBase::disconnect_rt)

@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 from typing import Optional, List
 import datetime
-from . import rt_bind as _rtb
+import rt_bind as _rtb
 
 def create_robot(model_name: str = "m1013"):
     """
