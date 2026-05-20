@@ -15,16 +15,16 @@ find_package(pybind11 REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Threads REQUIRED)
 
-# 3. Doosan SDK 경로 설정
-set(DSR_SDK_DIR "/home/uon/uon_rt/drfl")
+# 🌟 3. 프로젝트 루트(uon_rt) 기준 상대 경로 설정
+# ${CMAKE_SOURCE_DIR}은 현재 CMakeLists.txt가 있는 uon_rt 폴더를 의미합니다.
+set(DSR_SDK_DIR "${CMAKE_SOURCE_DIR}/drfl")
 set(DSR_SDK_INC "${DSR_SDK_DIR}/include")
 set(DSR_LIB_PATH "${DSR_SDK_DIR}/library/Linux/64bits/amd64/24.04")
 
-# 🌟 3-1. Hanwha SDK 경로 설정 (제공해주신 구조 반영)
-set(HCR_SDK_DIR "/home/uon/uon_rt/hcr")
+set(HCR_SDK_DIR "${CMAKE_SOURCE_DIR}/hcr")
 set(HCR_SDK_INC "${HCR_SDK_DIR}/include")
 set(HCR_LIB_PATH "${HCR_SDK_DIR}/lib") 
-set(HCR_KINE_LIB_PATH "${HCR_LIB_PATH}/kinematics") # 기구학 라이브러리 경로
+set(HCR_KINE_LIB_PATH "${HCR_LIB_PATH}/kinematics")
 
 # 4. 헤더 경로 설정
 include_directories(
@@ -33,7 +33,7 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/rt_bind
     ${EIGEN3_INCLUDE_DIRS}
     ${DSR_SDK_INC}
-    ${HCR_SDK_INC}  # 한화 SDK 헤더 경로 추가
+    ${HCR_SDK_INC}
 )
 
 # 5. 컴파일 옵션
@@ -64,16 +64,16 @@ target_link_libraries(rt_bind PRIVATE
     "${DSR_LIB_PATH}/libDRFL.a"
     "${DSR_LIB_PATH}/libPocoNet.so"
     "${DSR_LIB_PATH}/libPocoFoundation.so"
-    # --- 🌟 Hanwha (제공된 파일명으로 정확히 링크) --- 
+    # --- Hanwha --- 
     "${HCR_LIB_PATH}/libclink_api_rpc_client.so"
-    "${HCR_KINE_LIB_PATH}/libkinematics_hcr_3gen.so" # 기구학 라이브러리 추가 링크
+    "${HCR_KINE_LIB_PATH}/libkinematics_hcr_3gen.so"
     # --- System ---
     rt dl
 )
 
 # 9. RPATH 설정 (런타임에 모든 .so 파일을 찾을 수 있도록)
+# 빌드된 .so가 실행될 때 라이브러리 위치를 스스로 찾게 합니다.
 set_target_properties(rt_bind PROPERTIES
-    # 🌟 한화의 lib 폴더와 kinematics 폴더를 모두 RPATH에 등록
     INSTALL_RPATH "${DSR_LIB_PATH};${HCR_LIB_PATH};${HCR_KINE_LIB_PATH}" 
     BUILD_WITH_INSTALL_RPATH TRUE
 )

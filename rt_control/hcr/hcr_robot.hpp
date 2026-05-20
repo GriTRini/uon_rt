@@ -14,8 +14,8 @@
 #include <cmath>
 
 #include "../core/robot_base.hpp"
-#include "clink_api_rpc.h"
-#include "clink_api_rpc_system.h"
+#include "../../hcr/include/clink_api_rpc.h"
+#include "../../hcr/include/clink_api_rpc_system.h"
 
 namespace rt_control {
 

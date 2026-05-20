@@ -6,7 +6,6 @@
 #include "trajectory/rtb_trajectory_generator.hpp"
 #include "core/rtb_robot_base.hpp"
 #include "../rt_control/model/model.hpp" 
-// #include "../rt_control/core/robot_base.hpp" // 필요에 따라 실제 경로 반영
 
 namespace py = pybind11;
 

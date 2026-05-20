@@ -84,10 +84,9 @@ public:
             m_min_angaccs = m1013::MAX_ANGACCS; 
             m_max_angaccs = m1013::MAX_ANGACCS;
             m_joints = m1013::joints;
-            
-            // 🌟 해당 로봇 고유의 최대 반경 로드
             m_max_reach = m1013::MAX_REACH; 
             return true;
+            
         } else if (model_name == "hcr14") {
             m_model_name = model_name;
             m_min_angles = hcr14::MIN_ANGLES; 
@@ -97,18 +96,9 @@ public:
             m_min_angaccs = hcr14::MAX_ANGACCS; 
             m_max_angaccs = hcr14::MAX_ANGACCS;
             m_joints = hcr14::joints;
-            
-            // 🌟 해당 로봇 고유의 최대 반경 로드
             m_max_reach = hcr14::MAX_REACH; 
             return true;
         }
-        
-        // [나중에 추가될 다른 모델 처리 예시]
-        // else if (model_name == "ur10") {
-        //     ...
-        //     m_max_reach = ur10::MAX_REACH;
-        //     return true;
-        // }
 
         return false;
     }
