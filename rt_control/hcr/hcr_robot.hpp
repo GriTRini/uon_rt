@@ -3,6 +3,7 @@
 #include <mutex>
 #include <thread>
 #include <iostream>
+#include <fstream>  // 🌟 파일 생성을 위해 추가
 #include <vector>
 #include <queue>
 #include <atomic>
@@ -12,6 +13,9 @@
 #include <chrono>
 #include <array>
 #include <cmath>
+#include <dlfcn.h>   // 🌟 SO 파일 위치 역추적(dladdr)을 위해 추가
+#include <limits.h>  // PATH_MAX 사용을 위해 추가
+#include <unistd.h>  // getcwd 사용을 위해 추가
 
 #include "../core/robot_base.hpp"
 #include "../../hcr/include/clink_api_rpc.h"
@@ -23,9 +27,9 @@ namespace rt_control {
  * @brief 한화로봇 실시간 제어 클래스 
  * RobotBase의 규격을 준수하며 HCR SDK(clink_api)와 통신을 담당합니다.
  */
-class HanwhaRobot : public RobotBase {
+class HcrRobot : public RobotBase {
 public:
-    HanwhaRobot(const std::string& model_name, 
+    HcrRobot(const std::string& model_name, 
                 const std::chrono::milliseconds update_dt = std::chrono::milliseconds(1))
         : RobotBase(model_name, update_dt),
           cbox_id(0), 
@@ -36,7 +40,7 @@ public:
         std::fill(std::begin(last_vel), std::end(last_vel), 0.0);
     }
 
-    ~HanwhaRobot() override {
+    ~HcrRobot() override {
         disconnect_rt();
         close_connection();
     }
@@ -48,29 +52,71 @@ public:
     bool open_connection(const std::string &strIpAddr = "", const uint32_t usPort = 0) override {
         std::lock_guard<std::mutex> lock(m_control_mutex);
         
-        std::string ip = strIpAddr.empty() ? "192.168.1.132" : strIpAddr; // 한화 기본 IP 예시
+        Dl_info dl_info;
+        std::string project_root = "";
+        
+        // 🌟 [수정] 범용 표준 함수인 'printf' 주소를 reinterpret_cast로 캐스팅하여 주입
+        // 함수 뒤에 괄호()를 붙이지 않고 이름만 적어야 주소값이 넘어갑니다.
+        if (dladdr(reinterpret_cast<const void*>(printf), &dl_info) && dl_info.dli_fname) {
+            std::string so_path(dl_info.dli_fname);
+            size_t pos = so_path.find("uon_rt");
+            if (pos != std::string::npos) {
+                project_root = so_path.substr(0, pos + 6); // ".../uon_rt" 절대경로 추출
+            }
+        }
+
+        // 폴백 안전장치
+        if (project_root.empty()) {
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, sizeof(cwd)) != nullptr) {
+                std::string current_dir(cwd);
+                size_t pos = current_dir.find("uon_rt");
+                if (pos != std::string::npos) project_root = current_dir.substr(0, pos + 6);
+            }
+        }
+
+        if (project_root.empty()) {
+            std::cerr << "❌ [Error] [Hanwha] 프로젝트 루트(uon_rt) 경로를 식별할 수 없습니다." << std::endl;
+            return false;
+        }
+
+        std::string config_file_path = project_root + "/hcr/config/config_rpc.ini";
+        std::string kinematics_path = project_root + "/hcr/lib/kinematics";
+        std::string log_save_path = project_root + "/hcr/log/real/rpc_api";
+
+        std::cout << "🚀 [Hanwha Path Engine] 가상환경 루트: " << project_root << std::endl;
+        std::cout << "📦 [Hanwha Path Engine] 기구학 로드 경로: " << kinematics_path << std::endl;
+
+        std::ofstream ini_file(config_file_path);
+        if (ini_file.is_open()) {
+            ini_file << "[client]\n";
+            ini_file << "log_save_path=" << log_save_path << "\n";
+            ini_file << "log_print_out=on\n";
+            ini_file << "kinematics_path=" << kinematics_path << "\n";
+            ini_file.close();
+        } else {
+            std::cerr << "❌ [Error] [Hanwha] 설정 파일 생성 실패: " << config_file_path << std::endl;
+            return false;
+        }
+
+        std::string ip = strIpAddr.empty() ? "192.168.1.132" : strIpAddr;
         CLINK_API_RESULT err;
 
-        // 1. 컨트롤 박스 연결
-        err = clink_rpc_system_cbox_connect(CLINK_CONFIG_FILE.c_str(), ip.c_str(), &cbox_id);
+        err = clink_rpc_system_cbox_connect(config_file_path.c_str(), ip.c_str(), &cbox_id);
         if (err != CLINK_API_RESULT_OK) {
             std::cerr << "[Error] [Hanwha] 컨트롤 박스 연결 실패: " << err << std::endl;
             return false;
         }
 
-        // 2. 제어SW 초기화
         err = clink_rpc_gen_system_create(cbox_id, "", CBOX_MODEL_NAME);
         if (err != CLINK_API_RESULT_OK && err < CLINK_API_RESULT_WARNING_BEGIN) return false;
 
-        // 3. 제어권 획득
         err = clink_rpc_system_control_take(cbox_id);
         if (err != CLINK_API_RESULT_OK) return false;
 
-        // 4. 로봇 생성
         err = clink_rpc_robot_create(cbox_id, ROBOT_MODEL_NAME, "", 0U, &robot_id);
         if (err != CLINK_API_RESULT_OK) return false;
 
-        // 5. EtherCAT 상태 확인 및 대기
         CLINK_ECAT_CONN_STATE ecat_stat = CLINK_ECAT_CONN_STATE_DISCONNECTED;
         clink_rpc_cbox_ecat_connection_state_get(cbox_id, &ecat_stat);
         if (CLINK_ECAT_CONN_STATE_CONNECTED != ecat_stat) {
@@ -80,7 +126,6 @@ public:
                 1000000, 1, &valid_event);
         }
 
-        // 6. 자동 속도 조절 기능 ON
         clink_rpc_robot_motion_auto_adjust_swith_set(cbox_id, robot_id, CLINK_SWITCH_ON);
 
         std::cout << "[Info] [Hanwha] 로봇 연결 및 초기화 완료: " << ip << std::endl;
@@ -126,9 +171,10 @@ public:
     // 구동 제어 및 데이터 획득 (Robot/Motion)
     // ==============================================================
 
-    bool servo_on() override {
+   bool servo_on() override {
         std::lock_guard<std::mutex> lock(m_control_mutex);
         
+        // 🌟 [수정] 불필요한 '|' 문자를 제거하여 컴파일 에러 해결
         CLINK_SWITCH result;
         clink_rpc_robot_servo_switch_get(cbox_id, robot_id, &result);
         if (result == CLINK_SWITCH_ON) return true;
@@ -137,14 +183,13 @@ public:
             return false;
         }
 
-        // 로봇의 현재 상태로 Trajectory Generator 초기화 (RobotBase 규격)
         const auto start_angles = this->get_current_angles();
         const auto start_angvels = this->get_current_angvels();
         if (start_angles.has_value() && start_angvels.has_value()) {
             m_traj_gen.initialize(m_model, start_angles.value(), start_angvels.value(), angles_t::Zero());
         }
 
-        m_update_timer.start(); // 실시간 제어 루프(update) 구동 시작
+        m_update_timer.start();
         return true;
     }
 
@@ -210,7 +255,7 @@ public:
 
 protected:
     // ==============================================================
-    // 🌟 실시간 루프 (Update) - m_update_timer 에 의해 주기적으로 호출됨
+    // 실시간 루프 (Update) - m_update_timer 에 의해 주기적으로 호출됨
     // ==============================================================
     void update() override {
         if (!m_is_rt_control_ready.load()) return;
@@ -250,7 +295,6 @@ private:
     // 상수 및 설정
     const CLINK_CBOX_MODEL  CBOX_MODEL_NAME = CLINK_CBOX_MODEL_3GEN;
     const CLINK_ROBOT_MODEL ROBOT_MODEL_NAME = CLINK_ROBOT_MODEL_HCR14;
-    const std::string       CLINK_CONFIG_FILE = "/config/config_rpc.ini"; // 실제 경로로 수정 필요
 
     // SMC 제어 파라미터
     const double LAMBDA = 10.0;

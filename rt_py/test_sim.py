@@ -72,7 +72,7 @@ def run_simulation():
     print("🚀 [Simulation] 6-Joint Kinematics 통합 분석 시작")
     
     # 모델 및 제네레이터 초기화
-    model = rc.RobotModel("m1013")
+    model = rc.RobotModel("hcr14")
     gen = rc.TrajGenerator()
     
     home_q = np.array([-90.0, 0.0, -90.0, 0.0, -90.0, 0.0])

@@ -21,11 +21,10 @@ public:
         if (lower_model.find("m1013") == 0) {
             return std::make_unique<DsrRobot>(model_name);
         } 
-        // 🌟 한화 시리즈 판단
+        // 🌟 한화 시리즈 판단 정상화
         else if (lower_model.find("hcr14") == 0) {
-            // return std::make_unique<HcrRobot>(model_name);
-            std::cerr << "한화 로봇(HCR) 클래스는 아직 구현되지 않았습니다." << std::endl;
-            return nullptr;
+            // 주석을 해제하고 실제 HcrRobot 객체를 생성하여 반환합니다.
+            return std::make_unique<HcrRobot>(model_name);
         }
 
         std::cerr << "[Error] 지원하지 않거나 인식할 수 없는 로봇 모델입니다: " << model_name << std::endl;
