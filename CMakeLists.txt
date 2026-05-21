@@ -15,14 +15,11 @@ find_package(pybind11 REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Threads REQUIRED)
 
-# 🌟 3. 프로젝트 루트(uon_rt) 기준 상대 경로 설정
-# ${CMAKE_SOURCE_DIR}은 현재 CMakeLists.txt가 있는 uon_rt 폴더를 의미합니다.
+# 3. 경로 설정
 set(DSR_SDK_DIR "${CMAKE_SOURCE_DIR}/drfl")
-set(DSR_SDK_INC "${DSR_SDK_DIR}/include")
 set(DSR_LIB_PATH "${DSR_SDK_DIR}/library/Linux/64bits/amd64/24.04")
 
 set(HCR_SDK_DIR "${CMAKE_SOURCE_DIR}/hcr")
-set(HCR_SDK_INC "${HCR_SDK_DIR}/include")
 set(HCR_LIB_PATH "${HCR_SDK_DIR}/lib") 
 set(HCR_KINE_LIB_PATH "${HCR_LIB_PATH}/kinematics")
 
@@ -32,58 +29,48 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/rt_control
     ${PROJECT_SOURCE_DIR}/rt_bind
     ${EIGEN3_INCLUDE_DIRS}
-    ${DSR_SDK_INC}
-    ${HCR_SDK_INC}
+    ${DSR_SDK_DIR}/include
+    ${HCR_SDK_DIR}/include
 )
 
-# 5. 컴파일 옵션 및 링커 플래그 설정
+# 5. 빌드 설정
 if(NOT MSVC)
-    add_definitions(-march=native)
-    add_definitions(-DEIGEN_MAX_ALIGN_BYTES=32)
-    add_definitions(-D_REENTRANT)
-    
-    # 👇 [추가] C++ 코드에 HCR SDK의 절대 경로를 넘겨줍니다.
+    add_definitions(-march=native -DEIGEN_MAX_ALIGN_BYTES=32 -D_REENTRANT)
     add_definitions(-DHANWHA_ROOT_PATH="${HCR_SDK_DIR}")
-    
-    # 🌟 [추가] 중요: RUNPATH 대신 강제로 전통적인 RPATH를 사용하도록 설정합니다.
+    # RPATH를 사용하도록 설정
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
 endif()
 
 # 6. 파이썬 모듈 빌드
-pybind11_add_module(rt_bind
-    rt_bind/rt_bind.cpp
-)
+pybind11_add_module(rt_bind rt_bind/rt_bind.cpp)
 
-# 7. 결과물 파일명 및 경로 설정
+# 7. 결과물 경로 (rt_py 폴더)
 set_target_properties(rt_bind PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/rt_py"
     OUTPUT_NAME "rt_bind"
     PREFIX ""     
-    SUFFIX ".so"  
+    SUFFIX ".so"
+    # 중요: 자기 자신 폴더($ORIGIN)를 라이브러리 탐색 경로로 설정
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH TRUE
 )
 
 # 8. 라이브러리 링크
 target_link_libraries(rt_bind PRIVATE 
     Eigen3::Eigen
     Threads::Threads
-    # --- Doosan ---
     "${DSR_LIB_PATH}/libDRFL.a"
     "${DSR_LIB_PATH}/libPocoNet.so"
     "${DSR_LIB_PATH}/libPocoFoundation.so"
-    # --- Hanwha --- 
     "${HCR_LIB_PATH}/libclink_api_rpc_client.so"
     "${HCR_KINE_LIB_PATH}/libkinematics_hcr_3gen.so"
-    # --- System ---
     rt dl
 )
 
-# 9. RPATH 설정 (런타임에 모든 .so 파일을 찾을 수 있도록)
-# 🌟 [수정 및 강화] 빌드 트리와 인스톨 트리 모두에서 RPATH가 완전 고정되도록 환경 플래그를 추가로 명시합니다.
-set(CMAKE_SKIP_BUILD_RPATH FALSE)
-set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-set(CMAKE_敵RPATH_USE_LINK_PATH TRUE)
-
-set_target_properties(rt_bind PROPERTIES
-    INSTALL_RPATH "${DSR_LIB_PATH};${HCR_LIB_PATH};${HCR_KINE_LIB_PATH}" 
-    BUILD_WITH_INSTALL_RPATH TRUE
+# 9. 빌드 후 의존성 라이브러리를 rt_py 폴더로 복사
+# 이렇게 하면 rt_py 폴더만 들고 다니면 어디서든 실행 가능합니다.
+add_custom_command(TARGET rt_bind POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HCR_LIB_PATH}/libclink_api_rpc_client.so" "$<TARGET_FILE_DIR:rt_bind>/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HCR_KINE_LIB_PATH}/libkinematics_hcr_3gen.so" "$<TARGET_FILE_DIR:rt_bind>/"
+    COMMENT "Copying dependency libraries to rt_py directory..."
 )
