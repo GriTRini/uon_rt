@@ -43,7 +43,7 @@ public:
     }
 
     // 4. [Task Space] AttrL & Align (🌟 행렬 매핑 수정됨)
-    bool attrl_py(const py::array_t<double>& goal_tmat, double kp = 50.0, double target_speed = 0.20) {
+    bool attrl_py(const py::array_t<double>& goal_tmat, double attrl_kp = 50.0, double attrj_kp = 150.0, double target_speed = 0.20) {
         // NumPy(RowMajor) 데이터를 Eigen이 오해하지 않도록 RowMajor 레이아웃을 명시합니다.
         Eigen::Map<const Eigen::Matrix<double, 4, 4, Eigen::RowMajor>> map_t(goal_tmat.data());
         
@@ -51,8 +51,8 @@ public:
         Eigen::Isometry3d target; 
         target.matrix() = map_t; 
         
-        // 🌟 수정 포인트: 추가된 target_speed 파라미터를 Base::attrl에 함께 전달합니다.
-        return Base::attrl(target, kp, target_speed);
+        // 🌟 수정 포인트: attrl_kp(작업공간 게인), attrj_kp(조인트 게인), target_speed를 모두 Base::attrl로 전달합니다.
+        return Base::attrl(target, attrl_kp, attrj_kp, target_speed);
     }
 
     bool align_tcp_to_floor_py(double yaw_deg, double kp) { return Base::align_tcp_to_floor(yaw_deg, kp); }

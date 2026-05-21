@@ -179,21 +179,23 @@ class TrajGenerator {
     // ---------------------------------------------------------------------
     // 행렬(tmat_t)을 직접 받는 attrl
     // ---------------------------------------------------------------------
-    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &kp = 50.0, double target_speed = 0.20) noexcept {
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, const value_t &attrl_kp = 50.0, const value_t &attrj_kp = 150.0, double target_speed = 0.20) noexcept {
+            
+        // 1. 객체를 생성할 때 새로 만든 생성자 규격에 맞춰 
+        //    attrl_kp, attrj_kp, target_speed를 각각 따로 넘겨주어 초기화합니다.
+        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset, 
+                                attrl_kp, attrj_kp, target_speed);
         
-        // 1. 기존처럼 5개의 인자로 객체를 먼저 생성합니다.
-        m_gen_attrl = TrajAttrL(&m_model, m_angles, m_angvels, m_angaccs, m_tcp_offset);
+        // 2. 목표 도달 가능 여부 검증 및 설정
+        //    앞서 수정한 set_goal_pose에도 동일하게 분리된 값을 전달합니다.
+        bool is_valid_target = m_gen_attrl.set_goal_pose(goal_tmat, attrl_kp, attrj_kp, target_speed);
         
-        // 🌟 2. 생성된 객체에 kp와 target_speed를 직접 주입합니다. (에러 해결!)
-        m_gen_attrl.set_kp(kp);
-        m_gen_attrl.set_target_speed(target_speed);
-        
-        // 3. 목표 도달 가능 여부 검증
-        bool is_valid_target = m_gen_attrl.set_goal_pose(goal_tmat);
         if (!is_valid_target) {
+            std::cerr << "[Error] attrl: 목표 지점(Pose) 도달이 불가능하여 명령이 거부되었습니다." << std::endl;
             return false;
         }
 
+        // 3. 상태 변경 및 실행
         m_traj_state = traj_state_t::ATTRL;
         return true;
     }

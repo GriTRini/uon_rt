@@ -100,18 +100,19 @@ class Robot:
         """관절 공간 사다리꼴 궤적 이동 명령 (Non-blocking)"""
         return self._impl.trapj(goal_q)
 
-    def attrl(self, goal_tmat: npt.NDArray, kp: float = 50.0, target_speed: float = 0.20) -> bool:
+    def attrl(self, goal_tmat: npt.NDArray, attrl_kp: float = 50.0, attrj_kp: float = 150.0, target_speed: float = 0.20) -> bool:
         """작업 공간 어트랙터 기반 이동 명령
         
         Args:
             goal_tmat (NDArray): 목표 4x4 변환 행렬 (Isometry3d)
-            kp (float, optional): 궤적 추종 P 게인. 기본값은 50.0.
+            attrl_kp (float, optional): 작업 공간(Task Space) 궤적 추종 P 게인. 기본값은 50.0.
+            attrj_kp (float, optional): 조인트 공간(Joint Space) 궤적 추종 P 게인. 기본값은 150.0.
             target_speed (float, optional): 목표 이동 속도 (m/s). 기본값은 0.20.
             
         Returns:
             bool: 명령 수락 여부 (물리적 한계 초과 시 False 반환)
         """
-        return self._impl.attrl(goal_tmat, kp, target_speed)
+        return self._impl.attrl(goal_tmat, attrl_kp, attrj_kp, target_speed)
 
     def align_to_floor(self, yaw_deg: float = 0.0, kp: float = 100.0) -> bool:
         """현재 위치를 유지하며 TCP를 바닥 방향(-Z)으로 정렬합니다."""

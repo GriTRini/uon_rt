@@ -47,7 +47,7 @@ PYBIND11_MODULE(rt_bind, m) {
         .def("trapj", &rtb::trajectory::TrajGenerator::trapj_py, 
              py::arg("goal_q"), py::arg("goal_dq") = py::none())
         .def("attrl", &rtb::trajectory::TrajGenerator::attrl_py, 
-             py::arg("goal_tmat"), py::arg("kp") = 50.0, py::arg("target_speed") = 0.20)
+             py::arg("goal_tmat"), py::arg("attrl_kp") = 50.0, py::arg("attrj_kp") = 150.0, py::arg("target_speed") = 0.20)
         .def("align_to_floor", &rtb::trajectory::TrajGenerator::align_tcp_to_floor_py, 
              py::arg("yaw_deg") = 0.0, py::arg("kp") = 100.0)
         .def("align_to_front", &rtb::trajectory::TrajGenerator::align_tcp_to_front_py, 
@@ -100,12 +100,12 @@ PYBIND11_MODULE(rt_bind, m) {
         }, py::arg("goal_q"))
 
         // attrl (행렬 입력 방식)
-        .def("attrl", [](rt_control::RobotBase& self, const Eigen::Ref<const Eigen::Matrix4d>& goal_tmat, double kp, double target_speed) {
+        .def("attrl", [](rt_control::RobotBase& self, const Eigen::Ref<const Eigen::Matrix4d>& goal_tmat, double attrl_kp, double attrj_kp, double target_speed) {
             Eigen::Isometry3d target; 
             target.matrix() = goal_tmat; 
-            // 🌟 수정 포인트: target_speed를 C++ 함수로 전달
-            return self.attrl(target, kp, target_speed);
-        }, py::arg("goal_tmat"), py::arg("kp") = 50.0, py::arg("target_speed") = 0.20)
+            // 🌟 수정 포인트: attrl_kp(작업공간)와 attrj_kp(조인트)를 분리해서 C++ 함수로 전달
+            return self.attrl(target, attrl_kp, attrj_kp, target_speed);
+        }, py::arg("goal_tmat"), py::arg("attrl_kp") = 50.0, py::arg("attrj_kp") = 150.0, py::arg("target_speed") = 0.20)
 
         // 정렬 및 상태 확인
         .def("align_to_floor", &rt_control::RobotBase::align_tcp_to_floor, 

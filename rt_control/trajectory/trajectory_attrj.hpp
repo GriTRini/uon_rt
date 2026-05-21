@@ -17,12 +17,12 @@ class TrajAttrJ {
   public:
     TrajAttrJ() = default;
 
-    // 🌟 수정 포인트: 마지막 인자로 kp 값을 전달받도록 추가 (기존 호환성을 위해 기본값 150.0 유지)
+    // 🌟 수정 포인트: 마지막 인자 이름을 명시적으로 'attrj_kp'로 변경
     TrajAttrJ(const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const angles_t &min_q, const angles_t &max_q,
               const angles_t &min_dq, const angles_t &max_dq,
               const angles_t &min_ddq, const angles_t &max_ddq,
-              value_t kp = 150.0) noexcept
+              value_t attrj_kp = 150.0) noexcept
         : m_angles(q), m_angvels(dq), m_angaccs(ddq),
           m_min_angles(min_q), m_max_angles(max_q),
           m_min_angvels(min_dq), m_max_angvels(max_dq),
@@ -31,8 +31,8 @@ class TrajAttrJ {
         m_goal_angles = q;
         m_goal_angvels = angles_t::Zero();
         
-        // 🌟 내부 하드코딩 삭제: 이제 생성자로 전달받은 kp 값으로 동기화됨
-        set_kp(kp);
+        // 🌟 전달받은 attrj_kp 값으로 조인트 PD 제어 게인 설정
+        set_kp(attrj_kp);
     }
 
     // TrajGenerator 업데이트 루프에서 호출
@@ -65,14 +65,14 @@ class TrajAttrJ {
         return true;
     }
 
-    // --- DSR 호환 Getters ---
+    // --- Getters ---
     [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
     [[nodiscard]] const angles_t& angvels() const noexcept { return m_angvels; }
     [[nodiscard]] const angles_t& angaccs() const noexcept { return m_angaccs; }
     [[nodiscard]] const angles_t& goal_angles() const noexcept { return m_goal_angles; }
     [[nodiscard]] const angles_t& goal_angvels() const noexcept { return m_goal_angvels; }
 
-    // --- DSR 호환 Setters ---
+    // --- Setters ---
     void set_goal_angles(const angles_t &new_goal) noexcept { 
         m_goal_angles = new_goal.cwiseMax(m_min_angles).cwiseMin(m_max_angles); 
     }
@@ -81,10 +81,10 @@ class TrajAttrJ {
         m_goal_angvels = new_goal_dq.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
     }
 
-    /** @brief DSR 스타일의 단일 값 Kp 설정 (임계 댐핑 Kd 자동 계산) */
+    /** @brief 조인트 단일 값 Kp 설정 (임계 댐핑 Kd 자동 계산) */
     void set_kp(value_t kp) noexcept {
         m_kp = angles_t::Constant(kp);
-        // Kd = 2 * sqrt(Kp)
+        // Kd = 2 * sqrt(Kp) 임계 댐핑 공식 적용
         m_kd = angles_t::Constant(2.0 * std::sqrt(std::max(0.0, kp)));
     }
 
@@ -110,7 +110,7 @@ class TrajAttrJ {
     
     angles_t m_kp, m_kd; 
     
-    // DSR은 상하한을 각각 관리하므로 min/max 구조 유지
+    // 안전을 위한 Min/Max 상하한
     angles_t m_min_angles, m_max_angles;
     angles_t m_min_angvels, m_max_angvels;
     angles_t m_min_angaccs, m_max_angaccs;
