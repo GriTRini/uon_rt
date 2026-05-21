@@ -70,16 +70,9 @@ public:
         return m_traj_gen.trapj(goal_angles, goal_angvels.value_or(angles_t::Zero()));
     }
 
-    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0) noexcept {
-        if (!m_update_timer.is_running()) return false;
-        return m_traj_gen.attrl(goal_tmat, kp);
-    }
-
-    [[nodiscard]] bool attrl(const value_t x, const value_t y, const value_t z, 
-                             const value_t r_deg, const value_t p_deg, const value_t yaw_deg, 
-                             const value_t kp = 50.0) noexcept {
-        if (!m_update_timer.is_running()) return false;
-        return m_traj_gen.attrl(x, y, z, r_deg, p_deg, yaw_deg, kp);
+    [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t kp = 50.0, double target_speed = 0.20) noexcept {
+        // 하위 제어기(m_traj_gen)로 target_speed까지 온전히 넘겨줍니다.
+        return m_traj_gen.attrl(goal_tmat, kp, target_speed);
     }
 
     [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, value_t kp = 100.0) noexcept {

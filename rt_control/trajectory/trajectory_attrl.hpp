@@ -24,8 +24,10 @@ class TrajAttrL : public TrajAttrJ {
     using a_t = Eigen::Matrix<value_t, 6, 1>;
 
   public:
-    TrajAttrL() : m_kp(50.0), m_traj_time(0.0), m_traj_duration(0.0), m_max_reach(0.0) {}
+    // 🌟 기본 생성자: 변수 초기화 리스트에 m_task_kp와 m_target_speed 추가
+    TrajAttrL() : m_task_kp(50.0), m_target_speed(0.20), m_traj_time(0.0), m_traj_duration(0.0), m_max_reach(0.0) {}
 
+    // 🌟 메인 생성자: 서명(인자 구조)은 그대로 유지하고 초기화만 업데이트
     TrajAttrL(const model::RobotModel* model, 
               const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const tmat_t& tcp_offset) noexcept
@@ -33,7 +35,8 @@ class TrajAttrL : public TrajAttrJ {
                model->get_min_angles(), model->get_max_angles(),
                model->get_min_angvels(), model->get_max_angvels(),
                model->get_min_angaccs(), model->get_max_angaccs()),
-          m_model(model), m_tcp_offset(tcp_offset), m_kp(50.0),
+          m_model(model), m_tcp_offset(tcp_offset), 
+          m_task_kp(50.0), m_target_speed(0.20), // 기존 m_kp(50.0)를 대체하고 속도 추가
           m_traj_time(0.0), m_traj_duration(0.0), m_max_reach(0.0)
     {
         auto [initial_pose, J] = ik::compute_forward_and_jacobian(m_model, q, m_tcp_offset);
@@ -43,6 +46,9 @@ class TrajAttrL : public TrajAttrJ {
 
         // model.hpp에서 찾은 기하학적 진짜 최대 반경 로드
         m_max_reach = m_model->get_max_reach();
+
+        // 🌟 객체 생성 직후 Task와 Joint의 Kp를 50.0으로 동기화
+        set_kp(m_task_kp);
     }
 
     [[nodiscard]] bool update(const value_t &dt) noexcept override {
@@ -79,8 +85,9 @@ class TrajAttrL : public TrajAttrJ {
         }
 
         Eigen::Matrix<double, 6, 1> x_dot;
-        x_dot.segment<3>(0) = p_err * m_kp;
-        x_dot.segment<3>(3) = w_err * m_kp;
+        // 🌟 m_kp 대신 이름이 명확해진 m_task_kp 적용
+        x_dot.segment<3>(0) = p_err * m_task_kp;
+        x_dot.segment<3>(3) = w_err * m_task_kp;
 
         // 🌟 이중 안전장치: 혹시라도 이동 중에 특이점에 걸릴 경우 DLS로 브레이크
         double max_safe_reach = m_max_reach * 0.98; // 98% 지점부터 브레이크
@@ -103,8 +110,9 @@ class TrajAttrL : public TrajAttrJ {
     }
 
     // --- Setters ---
-    // 🌟 [수정] 반환형을 bool로 변경하여 명령 수락(true)과 거부(false)를 구분합니다.
-    [[nodiscard]] bool set_goal_pose(const tmat_t& goal) noexcept { 
+    
+    // 🌟 명령 시마다 속도를 덮어쓸 수 있도록 파라미터 추가 (기본값 -1.0)
+    [[nodiscard]] bool set_goal_pose(const tmat_t& goal, double override_speed = -1.0) noexcept { 
         
         // ==============================================================
         // 🚨 1. 명령 사전 검증: 로봇의 물리적 한계 반경 초과 여부 체크
@@ -131,18 +139,32 @@ class TrajAttrL : public TrajAttrJ {
         m_traj_time = 0.0; 
 
         double distance = (m_final_tmat.translation() - m_start_tmat.translation()).norm();
-        double target_speed = 0.20;
-        m_traj_duration = distance / target_speed;
+        
+        // 🌟 입력된 속도가 양수면 그 속도를 쓰고, 아니면 멤버 변수에 저장된 기본 속도 사용
+        double apply_speed = (override_speed > 0.0) ? override_speed : m_target_speed;
+        m_traj_duration = distance / apply_speed;
 
         if (m_traj_duration < 0.1) m_traj_duration = 0.1;
 
         return true; // 명령 정상 수락 완료
     }
 
-    void set_kp(value_t kp) noexcept { m_kp = kp; }
+    // 🌟 Kp 동기화 (Task와 Joint의 게인을 동시에 업데이트)
+    using Base::set_kp; 
+    void set_kp(value_t kp) noexcept { 
+        m_task_kp = kp;       // Task Space 제어 게인 업데이트
+        Base::set_kp(kp);     // Joint Space 제어 게인 업데이트
+    }
+
+    // 🌟 목표 속도 변경
+    void set_target_speed(double speed) noexcept {
+        m_target_speed = std::max(0.01, speed);
+    }
+
+    // 기존 Setter 유지
     void set_max_reach(double max_reach) noexcept { m_max_reach = max_reach; }
 
-    // --- Getters ---
+    // --- Getters --- (기존 형태 완벽 유지)
     [[nodiscard]] const tmat_t& goal_pose() const noexcept { return m_final_tmat; }
     [[nodiscard]] double max_reach() const noexcept { return m_max_reach; }
 
@@ -150,7 +172,9 @@ class TrajAttrL : public TrajAttrJ {
     const model::RobotModel* m_model = nullptr;
     tmat_t m_goal_tmat;     
     tmat_t m_tcp_offset;
-    value_t m_kp; 
+    
+    value_t m_task_kp;      // 기존 m_kp 대체
+    double m_target_speed;  // 🌟 새롭게 추가된 속도 멤버 변수
 
     tmat_t m_start_tmat;    
     tmat_t m_final_tmat;    

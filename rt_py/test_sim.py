@@ -18,7 +18,7 @@ def analyze_and_store_all_joints(history, dt):
 
     # 2. 통합 데이터프레임 구축 (CSV 저장용)
     data_dict = {"time": time_arr, "mode": mode_arr}
-    for i in range(6):
+    for i in range(6): 
         data_dict[f"j{i+1}_pos"] = q_arr[:, i]
         data_dict[f"j{i+1}_vel"] = dq_arr[:, i]
         data_dict[f"j{i+1}_acc"] = ddq_arr[:, i]

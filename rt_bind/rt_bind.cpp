@@ -47,7 +47,7 @@ PYBIND11_MODULE(rt_bind, m) {
         .def("trapj", &rtb::trajectory::TrajGenerator::trapj_py, 
              py::arg("goal_q"), py::arg("goal_dq") = py::none())
         .def("attrl", &rtb::trajectory::TrajGenerator::attrl_py, 
-             py::arg("goal_tmat"), py::arg("kp") = 50.0)
+             py::arg("goal_tmat"), py::arg("kp") = 50.0, py::arg("target_speed") = 0.20)
         .def("align_to_floor", &rtb::trajectory::TrajGenerator::align_tcp_to_floor_py, 
              py::arg("yaw_deg") = 0.0, py::arg("kp") = 100.0)
         .def("align_to_front", &rtb::trajectory::TrajGenerator::align_tcp_to_front_py, 
@@ -100,16 +100,12 @@ PYBIND11_MODULE(rt_bind, m) {
         }, py::arg("goal_q"))
 
         // attrl (행렬 입력 방식)
-        .def("attrl", [](rt_control::RobotBase& self, const Eigen::Ref<const Eigen::Matrix4d>& goal_tmat, double kp) {
+        .def("attrl", [](rt_control::RobotBase& self, const Eigen::Ref<const Eigen::Matrix4d>& goal_tmat, double kp, double target_speed) {
             Eigen::Isometry3d target; 
             target.matrix() = goal_tmat; 
-            return self.attrl(target, kp);
-        }, py::arg("goal_tmat"), py::arg("kp") = 50.0)
-
-        // 🌟 추가: attrl (오일러 각도 X, Y, Z, R, P, Yaw 입력 방식 오버로딩)
-        .def("attrl", [](rt_control::RobotBase& self, double x, double y, double z, double r, double p, double yaw, double kp) {
-            return self.attrl(x, y, z, r, p, yaw, kp);
-        }, py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r_deg"), py::arg("p_deg"), py::arg("yaw_deg"), py::arg("kp") = 50.0)
+            // 🌟 수정 포인트: target_speed를 C++ 함수로 전달
+            return self.attrl(target, kp, target_speed);
+        }, py::arg("goal_tmat"), py::arg("kp") = 50.0, py::arg("target_speed") = 0.20)
 
         // 정렬 및 상태 확인
         .def("align_to_floor", &rt_control::RobotBase::align_tcp_to_floor, 

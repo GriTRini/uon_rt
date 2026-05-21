@@ -17,11 +17,12 @@ class TrajAttrJ {
   public:
     TrajAttrJ() = default;
 
-    // DSR 스타일의 생성자 인자 구성
+    // 🌟 수정 포인트: 마지막 인자로 kp 값을 전달받도록 추가 (기존 호환성을 위해 기본값 150.0 유지)
     TrajAttrJ(const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const angles_t &min_q, const angles_t &max_q,
               const angles_t &min_dq, const angles_t &max_dq,
-              const angles_t &min_ddq, const angles_t &max_ddq) noexcept
+              const angles_t &min_ddq, const angles_t &max_ddq,
+              value_t kp = 150.0) noexcept
         : m_angles(q), m_angvels(dq), m_angaccs(ddq),
           m_min_angles(min_q), m_max_angles(max_q),
           m_min_angvels(min_dq), m_max_angvels(max_dq),
@@ -30,8 +31,8 @@ class TrajAttrJ {
         m_goal_angles = q;
         m_goal_angvels = angles_t::Zero();
         
-        // 기본 게인 설정 (DSR은 보통 10~40 사이 사용)
-        set_kp(150.0);
+        // 🌟 내부 하드코딩 삭제: 이제 생성자로 전달받은 kp 값으로 동기화됨
+        set_kp(kp);
     }
 
     // TrajGenerator 업데이트 루프에서 호출
@@ -51,10 +52,10 @@ class TrajAttrJ {
         angles_t next_angvels = m_angvels + m_angaccs * dt;
         angles_t clamped_angvels = next_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
         
-        // 🌟 핵심 개선 1: 속도가 클램핑되었다면, 실제 적용 가능한 가속도로 역산하여 동기화
+        // 핵심 개선 1: 속도가 클램핑되었다면, 실제 적용 가능한 가속도로 역산하여 동기화
         m_angaccs = (clamped_angvels - m_angvels) / dt;
         
-        // 🌟 핵심 개선 2: 정확한 등가속도 운동 공식을 사용한 위치 적분 (x = x0 + v0*t + 0.5*a*t^2)
+        // 핵심 개선 2: 정확한 등가속도 운동 공식을 사용한 위치 적분
         m_angles += (m_angvels * dt) + (0.5 * m_angaccs * dt * dt);
         
         // 4. 최종 속도 업데이트
