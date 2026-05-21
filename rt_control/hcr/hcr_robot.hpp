@@ -33,7 +33,7 @@ namespace rt_control {
 class HcrRobot : public RobotBase {
 public:
     HcrRobot(const std::string& model_name, 
-             const std::chrono::milliseconds update_dt = std::chrono::milliseconds(1))
+             const std::chrono::milliseconds update_dt = std::chrono::milliseconds(20))
         : RobotBase(model_name, update_dt),
           CLINK_CONFIG_FILE(std::string(HANWHA_ROOT_PATH) + "/config/config_rpc.ini"),
           m_is_connected(false),
