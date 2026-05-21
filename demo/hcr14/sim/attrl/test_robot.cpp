@@ -41,7 +41,7 @@ int main() {
     traj_gen.initialize(model, q_home, angles_t::Zero(), angles_t::Zero());
 
     // 🌟 [핵심 추가 사항] TCP 설정: Z축으로 0.25m(25cm) 추가
-    traj_gen.set_tcp(0.0, 0.0, 0.255, 0.0, 0.0, 0.0);
+    traj_gen.set_tcp(0.0, 0.0, 0.25, 0.0, 0.0, 0.0);
     std::cout << "✅ TCP 설정 완료: Z축 +0.25m 오프셋 적용" << std::endl;
 
     std::ofstream csv("reach_and_lift_test.csv");

@@ -30,7 +30,7 @@ def get_transform_matrix(x, y, z, roll, pitch, yaw):
     return T
 
 # ==============================================================================
-# 🌟 [한화 HCR-14 로봇 전용 기하학 구조 설정]
+# [한화 HCR-14 로봇 전용 기하학 구조 설정]
 # ==============================================================================
 LINK_OFFSETS = [
     get_transform_matrix(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),                     # Joint 1
@@ -41,12 +41,16 @@ LINK_OFFSETS = [
     get_transform_matrix(0.0, 0.0, 0.1512, -1.5708, 0.0, 0.0)               # Joint 6
 ]
 
+# 🌟 URDF 기반 Flange 고정 오프셋 (Link 6 -> Flange)
+FLANGE_OFFSET = get_transform_matrix(0.0, 0.0, 0.1325, 0.0, 0.0, 0.0)
+
 # --- 2. 정기구학(Forward Kinematics) 계산 함수 ---
 def get_joint_positions(angles_deg):
     angles_rad = np.radians(angles_deg)
     positions = [[0, 0, 0]] # Base 좌표
     T_current = np.eye(4)
     
+    # 1~6번 조인트까지의 위치 계산
     for i in range(6):
         T_current = T_current @ LINK_OFFSETS[i]
         
@@ -59,6 +63,11 @@ def get_joint_positions(angles_deg):
         
         T_current = T_current @ Rz
         positions.append(T_current[:3, 3].tolist())
+        
+    # 🌟 Flange 위치 계산 (Link 6 회전 후 Z축으로 0.1325m 전진)
+    # 배열에 추가함으로써 Link6와 Flange가 시각적으로 하나의 뼈대(강체)로 묶임
+    T_flange = T_current @ FLANGE_OFFSET
+    positions.append(T_flange[:3, 3].tolist())
         
     return np.array(positions)
 
@@ -75,52 +84,47 @@ def plot_robot_trajectory_3d(file_path="reach_and_lift_test.csv"):
     fig = plt.figure(figsize=(16, 8))
     fig.subplots_adjust(bottom=0.22, wspace=0.25)
 
-    # ------------------ [좌측 차트] 시간에 따른 X, Y, Z 좌표 변화 그래프 ------------------
+    # ------------------ [좌측 차트] X, Y, Z 좌표 변화 ------------------
     ax_xyz = fig.add_subplot(121)
     
-    # TCP 라인 (실선)
+    # TCP 라인
     ax_xyz.plot(df['Time'], df['TCP_X'], label='TCP X', color='red', linewidth=2)
     ax_xyz.plot(df['Time'], df['TCP_Y'], label='TCP Y', color='green', linewidth=2)
     ax_xyz.plot(df['Time'], df['TCP_Z'], label='TCP Z', color='blue', linewidth=2)
     
-    # Flange 라인 (점선)
-    ax_xyz.plot(df['Time'], df['Flange_X'], label='Flange X', color='red', linestyle='--', linewidth=1.5, alpha=0.7)
-    ax_xyz.plot(df['Time'], df['Flange_Y'], label='Flange Y', color='green', linestyle='--', linewidth=1.5, alpha=0.7)
-    ax_xyz.plot(df['Time'], df['Flange_Z'], label='Flange Z', color='blue', linestyle='--', linewidth=1.5, alpha=0.7)
+    # Flange 라인 (CSV 데이터)
+    ax_xyz.plot(df['Time'], df['Flange_X'], label='CSV Flange X', color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_xyz.plot(df['Time'], df['Flange_Y'], label='CSV Flange Y', color='green', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_xyz.plot(df['Time'], df['Flange_Z'], label='CSV Flange Z', color='blue', linestyle='--', linewidth=1.5, alpha=0.7)
     
-    vline = ax_xyz.axvline(x=df['Time'].iloc[0], color='black', linestyle=':', linewidth=1.5, label='Current Time')
+    vline = ax_xyz.axvline(x=df['Time'].iloc[0], color='black', linestyle=':', linewidth=1.5)
 
     ax_xyz.set_title('TCP vs Flange Position', fontsize=13, fontweight='bold')
-    ax_xyz.set_xlabel('Time (seconds)', fontsize=11)
-    ax_xyz.set_ylabel('Position (meters)', fontsize=11)
+    ax_xyz.set_xlabel('Time (seconds)')
+    ax_xyz.set_ylabel('Position (meters)')
     ax_xyz.grid(True, linestyle=':', alpha=0.6)
-    
-    # 레전드가 너무 길어질 수 있으므로 2열로 배치
     ax_xyz.legend(loc='upper right', ncol=2, fontsize=9)
 
-    # ------------------ [우측 차트] 한화 HCR-14 3D 로봇 모델 시각화 ------------------
+    # ------------------ [우측 차트] 3D 로봇 모델 시각화 ------------------
     ax_3d = fig.add_subplot(122, projection='3d')
 
     # 전체 궤적 가이드라인 표시
     ax_3d.plot(df['TCP_X'], df['TCP_Y'], df['TCP_Z'], color='blue', linestyle='--', linewidth=1, alpha=0.3, label='TCP Path')
-    ax_3d.plot(df['Flange_X'], df['Flange_Y'], df['Flange_Z'], color='red', linestyle='-', linewidth=1, alpha=0.3, label='Flange Path')
 
     # 최초 프레임 로봇 팔 시각화
     initial_angles = df.iloc[0][['J1', 'J2', 'J3', 'J4', 'J5', 'J6']].values
     joints = get_joint_positions(initial_angles)
     
-    # 로봇 암(FK)
+    # 🌟 로봇 암 렌더링 (이제 Base부터 Flange 끝단까지 8개의 노드로 그려집니다)
     line_arm, = ax_3d.plot(joints[:, 0], joints[:, 1], joints[:, 2], 
-                           color='dodgerblue', linewidth=5, marker='o', markersize=8, markerfacecolor='orange', label='HCR-14 Arm')
+                           color='dodgerblue', linewidth=5, marker='o', markersize=8, markerfacecolor='orange', label='HCR-14 Arm + Flange')
 
-    # 현재 프레임의 TCP와 Flange를 나타내는 동적 마커 점
+    # 동적 마커 점 (목표 TCP 확인용)
     tcp_pt, = ax_3d.plot([df['TCP_X'].iloc[0]], [df['TCP_Y'].iloc[0]], [df['TCP_Z'].iloc[0]], 
-                         marker='o', color='blue', markersize=8, linestyle='None', label='Current TCP')
-    flange_pt, = ax_3d.plot([df['Flange_X'].iloc[0]], [df['Flange_Y'].iloc[0]], [df['Flange_Z'].iloc[0]], 
-                            marker='X', color='red', markersize=8, linestyle='None', label='Current Flange')
+                         marker='X', color='red', markersize=8, linestyle='None', label='TCP Target')
 
     ax_3d.legend(fontsize=9)
-    ax_3d.set_title('HCR-14 Kinematics & Tool Center Point', fontsize=13, fontweight='bold')
+    ax_3d.set_title('HCR-14 with Flange Attached', fontsize=13, fontweight='bold')
     ax_3d.set_xlabel('X (m)')
     ax_3d.set_ylabel('Y (m)')
     ax_3d.set_zlabel('Z (m)')
@@ -130,7 +134,7 @@ def plot_robot_trajectory_3d(file_path="reach_and_lift_test.csv"):
     ax_3d.set_zlim([-0.2, 1.6])
     ax_3d.view_init(elev=25, azim=135)
 
-    # ------------------ [하단 UI] 인터랙티브 타임라인 슬라이더 ------------------
+    # ------------------ [하단 UI] 슬라이더 ------------------
     ax_slider = plt.axes([0.2, 0.08, 0.6, 0.03])
     slider = Slider(ax_slider, 'Time Step', 0, len(df) - 1, valinit=0, valfmt='%0.0f')
 
@@ -140,15 +144,14 @@ def plot_robot_trajectory_3d(file_path="reach_and_lift_test.csv"):
         # 1. 3D 차트 로봇 암 FK 업데이트
         angles = df.iloc[idx][['J1', 'J2', 'J3', 'J4', 'J5', 'J6']].values
         new_joints = get_joint_positions(angles)
+        
+        # 선과 점 위치 갱신
         line_arm.set_data(new_joints[:, 0], new_joints[:, 1])
         line_arm.set_3d_properties(new_joints[:, 2])
         
-        # 2. 3D 차트 TCP & Flange 포인트 업데이트
+        # 2. 3D 차트 TCP 위치 업데이트
         tcp_pt.set_data([df['TCP_X'].iloc[idx]], [df['TCP_Y'].iloc[idx]])
         tcp_pt.set_3d_properties([df['TCP_Z'].iloc[idx]])
-        
-        flange_pt.set_data([df['Flange_X'].iloc[idx]], [df['Flange_Y'].iloc[idx]])
-        flange_pt.set_3d_properties([df['Flange_Z'].iloc[idx]])
         
         # 3. 2D 차트 세로선 업데이트
         current_time = df['Time'].iloc[idx]
