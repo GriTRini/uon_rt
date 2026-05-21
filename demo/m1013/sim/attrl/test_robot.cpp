@@ -24,14 +24,18 @@ void log_data(std::ofstream& csv, double time, int mode, const TrajGenerator& tr
 }
 
 int main() {
+    // 모델 초기화 (기존 코드 유지)
     rt_control::model::RobotModel model("m1013");
     TrajGenerator traj_gen;
     
     using tmat_t = Eigen::Isometry3d;
     using angles_t = Eigen::Matrix<double, 6, 1>;
 
-    // 초기 자세 설정 (Home)
-    angles_t q_home; q_home << -86.96, -31.27, -59.55, -0.18, -89.7, 0.0;
+    // ==========================================================
+    // [초기 자세 설정] 요청하신 관절 각도 적용
+    // ==========================================================
+    angles_t q_home; 
+    q_home << 97.64, -101.78, -91.5, -73.42, 88.9, 8.74;
     traj_gen.initialize(model, q_home, angles_t::Zero(), angles_t::Zero());
 
     std::ofstream csv("reach_and_lift_test.csv");
@@ -46,7 +50,7 @@ int main() {
     // ==========================================================
     // [Step 1] Home 위치로 이동
     // ==========================================================
-    std::cout << "Step 1: Move to Home Pose" << std::endl;
+    std::cout << "Step 1: 초기 설정된 Home 위치로 이동 (Joint Angles)" << std::endl;
     traj_gen.trapj(q_home);
     while (!traj_gen.goal_reached(0.1, 0.002)) { 
         traj_gen.update(dt); 
@@ -54,31 +58,22 @@ int main() {
         current_time += dt; 
         if(current_time > 10.0) break; // 무한루프 방지
     }
+    std::cout << " -> Goal Reached at Step 1!" << std::endl;
 
     // ==========================================================
-    // [Step 2] X=0, Y=1.1, Z=0 위치로 이동 (명령 검증 및 예외 처리)
+    // [Step 2] X=0.075, Y=0.85, Z=0.3 위치로 이동
     // ==========================================================
-    std::cout << "\nStep 2: Move to X=0.5, Y=0.5, Z=0.0" << std::endl;
+    std::cout << "\nStep 2: Move to X=0.075, Y=0.85, Z=0.3" << std::endl;
     
-    tmat_t target_tmat = traj_gen.tmat(); // 현재 TCP 회전 행렬 복사
-    target_tmat.translation() << 0.5, 0.5, 0.0; // 1.1m로 무리한 병진 좌표 설정
+    // 현재 TCP 회전 행렬 및 위치 복사 (Python의 self.robot.tmat.copy() 동일)
+    tmat_t target_tmat = traj_gen.tmat(); 
+    target_tmat.translation() << 0.075, 0.85, 0.3; // 목표 병진 좌표 설정
     
-    // 🌟 [안전 예외 처리 적용] attrl의 반환값을 확인합니다.
+    // 이동 명령 및 예외 처리
     if (!traj_gen.attrl(target_tmat, 100.0)) {
-        std::cout << "🚨 [WARNING] 목표 위치(Y=1.1m)가 로봇의 가용 반경을 초과하여 명령이 거부되었습니다!" << std::endl;
-        std::cout << " -> [Fallback] Y=0.8m 의 안전한 위치로 목표를 수정하여 다시 시도합니다." << std::endl;
-        
-        // 거부당했을 경우, Y값을 0.8로 낮추어 다시 명령
-        target_tmat.translation() << 0.0, 0.8, 0.0; 
-        
-        // 재명령마저 실패할 경우를 대비한 2차 방어막
-        if (!traj_gen.attrl(target_tmat, 100.0)) {
-            std::cout << "🚨 [FATAL] 수정된 목표(Y=0.8m)도 도달 불가능합니다. 제어를 종료합니다." << std::endl;
-            csv.close();
-            return -1;
-        }
-    } else {
-        std::cout << "✅ [SUCCESS] 명령 수락됨: 명령 위치로 이동을 시작합니다." << std::endl;
+        std::cout << "🚨 [FATAL] Step 2 목표 위치에 도달할 수 없습니다. 제어를 종료합니다." << std::endl;
+        csv.close();
+        return -1;
     }
 
     test_duration = 5.0; // 최대 5초 대기
@@ -94,23 +89,23 @@ int main() {
         log_data(csv, current_time, 1, traj_gen);
         current_time += dt;
         
-        if (traj_gen.goal_reached(0.01, 0.002)) { // 도달 시 조기 종료
+        if (traj_gen.goal_reached(0.01, 0.002)) { 
             std::cout << " -> Goal Reached at Step 2!" << std::endl;
             break;
         }
     }
 
     // ==========================================================
-    // [Step 3] Z축을 1.0m 위로 들어올리기
+    // [Step 3] Z축을 0.0으로 하강 (Pick/Place 동작)
     // ==========================================================
-    std::cout << "\nStep 3: Lift Z axis up to 1.0m" << std::endl;
+    std::cout << "\nStep 3: Move Z axis down to 0.0m" << std::endl;
     
+    // Step 2 완료 후의 현재 tmat을 다시 복사
     target_tmat = traj_gen.tmat();
-    target_tmat.translation().z() = 0.5; // Z를 0.5m로 설정
+    target_tmat.translation().z() = 0.0; // Z만 0.0으로 변경
     
-    // Step 3에서도 혹시 모를 한계 초과를 대비해 방어 코드를 작성하는 것이 좋은 습관입니다.
     if (!traj_gen.attrl(target_tmat, 100.0)) {
-         std::cout << "🚨 [WARNING] 리프트 동작이 한계를 초과하여 스킵합니다." << std::endl;
+         std::cout << "🚨 [WARNING] Step 3 하강 동작이 한계를 초과하여 스킵합니다." << std::endl;
     } else {
         test_duration = 5.0; 
         start_time = current_time;
@@ -133,6 +128,6 @@ int main() {
     }
 
     csv.close();
-    std::cout << "\n✅ 로봇 뻗기 및 들어올리기(Lift) 시나리오 완료!" << std::endl;
+    std::cout << "\n✅ 로봇 타겟 이동 및 Z축 하강 시나리오 완료!" << std::endl;
     return 0;
 }

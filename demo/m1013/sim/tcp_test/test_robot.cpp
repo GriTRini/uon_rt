@@ -22,7 +22,7 @@ int main() {
     Eigen::Isometry3d current_goal = Eigen::Isometry3d::Identity();
 
     // 공용 TCP 변수 설정 (기록용)
-    double tx = 0.0, ty = 0.0, tz = 0.1, tr = 0.0, tp = 60.0, tyw = 45.0;
+    double tx = 0.0, ty = 0.0, tz = 0.25, tr = 0.0, tp = 60.0, tyw = 45.0;
 
     // ---------------------------------------------------------
     // 🛠️ 헬퍼 함수: 시뮬레이션 업데이트 및 CSV 데이터 기록
