@@ -239,8 +239,61 @@ public:
     }
 
     std::optional<angles_t> get_current_torque() const noexcept { return std::nullopt; }
-    void set_digital_output(int index, bool value) override { }
-    bool get_digital_input(int index) override { return false; }
+    // ==============================================================
+    // 🔌 Digital I/O 제어
+    // ==============================================================
+
+    void set_digital_output(int index, bool value) override { 
+        // 1. 연결 상태 확인
+        if (!m_is_connected.load()) {
+            std::cerr << "[Warning] [HcrRobot] 로봇이 연결되어 있지 않아 Digital Output을 설정할 수 없습니다." << std::endl;
+            return;
+        }
+
+        // 2. bool 값을 uint32_t (1 또는 0)으로 변환
+        uint32_t io_value = value ? 1 : 0;
+
+        // 3. CLINK API 호출
+        CLINK_API_RESULT res = clink_rpc_cbox_io_digital_output_set(
+            cbox_id, 
+            static_cast<uint32_t>(index), 
+            io_value
+        );
+
+        // 4. 결과 처리
+        if (res != CLINK_API_RESULT_OK) {
+            std::cerr << "[Error] [HcrRobot] Digital Output 설정 실패 (Index: " 
+                      << index << ", Value: " << value 
+                      << ", Error Code: " << res << ")" << std::endl;
+        }
+    }
+
+    bool get_digital_input(int index) override { 
+        // 1. 연결 상태 확인
+        if (!m_is_connected.load()) {
+            std::cerr << "[Warning] [HcrRobot] 로봇이 연결되어 있지 않아 Digital Input을 읽을 수 없습니다." << std::endl;
+            return false;
+        }
+
+        uint32_t p_value = 0;
+
+        // 2. CLINK API 호출
+        CLINK_API_RESULT res = clink_rpc_cbox_io_digital_input_get(
+            cbox_id, 
+            static_cast<uint32_t>(index), 
+            &p_value
+        );
+
+        // 3. 결과 처리
+        if (res != CLINK_API_RESULT_OK) {
+            std::cerr << "[Error] [HcrRobot] Digital Input 읽기 실패 (Index: " 
+                      << index << ", Error Code: " << res << ")" << std::endl;
+            return false;
+        }
+
+        // 4. uint32_t 값을 bool로 변환하여 반환 (0이 아니면 true)
+        return p_value != 0;
+    }
 
     // ==============================================================
     // 🎯 물리적 로봇 안착(Settling) 확인 함수
