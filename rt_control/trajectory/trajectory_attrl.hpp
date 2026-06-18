@@ -19,27 +19,33 @@ class TrajAttrL : public TrajAttrJ {
     using a_t = Eigen::Matrix<value_t, 6, 1>;
 
   public:
-    TrajAttrL(value_t attrl_kp = 50.0, value_t attrj_kp = 150.0, value_t attrj_zeta = 1.2, double target_speed = 0.20) 
+    // =========================================================================
+    // 🌟 1. 기본 생성자: 객체만 먼저 만들 때도 각각의 Kp를 따로 지정 가능
+    // =========================================================================
+    TrajAttrL(value_t attrl_kp = 50.0, value_t attrj_kp = 150.0, double target_speed = 0.20) 
         : m_task_kp(attrl_kp), m_target_speed(target_speed), 
           m_traj_time(0.0), m_traj_duration(0.0), m_max_reach(0.0) 
     {
-        Base::set_kp(attrj_kp, attrj_zeta); 
+        // TrajAttrJ(Joint)의 Kp 따로 설정
+        Base::set_kp(attrj_kp); 
     }
 
+    // =========================================================================
+    // 🌟 2. 메인 생성자: 로봇 모델과 함께 초기화할 때 각각의 Kp를 따로 지정 가능
+    // =========================================================================
     TrajAttrL(const model::RobotModel* model, 
               const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const tmat_t& tcp_offset,
-              value_t attrl_kp = 50.0,      
-              value_t attrj_kp = 150.0,     
-              value_t attrj_zeta = 1.2,     
+              value_t attrl_kp = 50.0,      // <-- 인자로 attrl_kp 받음
+              value_t attrj_kp = 150.0,     // <-- 인자로 attrj_kp 받음
               double target_speed = 0.20) noexcept
         : Base(q, dq, ddq, 
                model->get_min_angles(), model->get_max_angles(),
                model->get_min_angvels(), model->get_max_angvels(),
                model->get_min_angaccs(), model->get_max_angaccs(),
-               attrj_kp, attrj_zeta),       
+               attrj_kp),                   // <-- Base(TrajAttrJ)로 attrj_kp 전달
           m_model(model), m_tcp_offset(tcp_offset), 
-          m_task_kp(attrl_kp),              
+          m_task_kp(attrl_kp),              // <-- m_task_kp 에 attrl_kp 저장
           m_target_speed(target_speed),
           m_traj_time(0.0), m_traj_duration(0.0), m_max_reach(0.0)
     {
@@ -83,6 +89,7 @@ class TrajAttrL : public TrajAttrJ {
         }
 
         Eigen::Matrix<double, 6, 1> x_dot;
+        // Task Space Gain (attrl_kp) 적용
         x_dot.segment<3>(0) = p_err * m_task_kp;
         x_dot.segment<3>(3) = w_err * m_task_kp;
 
@@ -99,24 +106,22 @@ class TrajAttrL : public TrajAttrJ {
         JJT += (lambda * lambda) * Eigen::Matrix<double, 6, 6>::Identity();
         Eigen::Matrix<double, 6, 1> dq_rad = J_curr.transpose() * JJT.ldlt().solve(x_dot);
 
-        // 🌟 목표 각도뿐만 아니라 목표 속도도 Base(TrajAttrJ)로 전달하여 출렁임 방지
-        angles_t target_dq_deg = dq_rad * (180.0 / M_PI);
-        angles_t next_q = Base::angles() + (target_dq_deg * dt);
-        
+        angles_t next_q = Base::angles() + (dq_rad * (180.0 / M_PI) * dt);
         Base::set_goal_angles(next_q);
-        Base::set_goal_angvels(target_dq_deg); 
         
         return Base::update(dt);
     }
 
+    // =========================================================================
+    // 🌟 3. 명령 전달 시에도 각각의 값을 따로 변경 가능하도록 유지
+    // =========================================================================
     [[nodiscard]] bool set_goal_pose(const tmat_t& goal, 
                                      double attrl_kp = 50.0, 
                                      double attrj_kp = 150.0, 
-                                     double attrj_zeta = 1.2, 
                                      double target_speed = 0.20) noexcept { 
         
         m_task_kp = attrl_kp;                 
-        Base::set_kp(attrj_kp, attrj_zeta);               
+        Base::set_kp(attrj_kp);               
         m_target_speed = std::max(0.01, target_speed); 
         
         double requested_distance = goal.translation().norm();
@@ -153,8 +158,8 @@ class TrajAttrL : public TrajAttrJ {
     tmat_t m_goal_tmat;     
     tmat_t m_tcp_offset;
     
-    value_t m_task_kp;      
-    double m_target_speed;  
+    value_t m_task_kp;      // attrl_kp (Task Space Gain) 저장용
+    double m_target_speed;  // target_speed 저장용
 
     tmat_t m_start_tmat;    
     tmat_t m_final_tmat;    
