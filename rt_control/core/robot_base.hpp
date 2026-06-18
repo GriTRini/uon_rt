@@ -7,11 +7,13 @@
 #include <functional>
 #include <atomic>
 #include <array>
+#include <vector> // std::vector 추가
 
 #include "core.hpp" 
 #include "../timer.hpp"
 #include "../model/model.hpp"
 #include "../trajectory/trajectory_generator.hpp"
+#include "../trajectory/trajectory_playj.hpp" // WaypointJ 구조체 인식을 위해 추가
 
 namespace rt_control {
 
@@ -32,6 +34,9 @@ public:
     using tmat_t = Eigen::Isometry3d;
     using jmat_t = Eigen::Matrix<double, 6, 6>;
     using a_t = Eigen::Matrix<value_t, 6, 1>;
+    
+    // 🌟 WaypointJ 타입 별칭 추가 (사용자 편의성)
+    using WaypointJ = rt_control::trajectory::WaypointJ;
 
 public:
     RobotBase(const std::string& model_name, 
@@ -73,6 +78,23 @@ public:
     [[nodiscard]] bool attrl(const tmat_t &goal_tmat, value_t attrl_kp = 50.0, value_t attrj_kp = 150.0, double target_speed = 0.20) noexcept {
         // 하위 제어기(m_traj_gen)로 attrl_kp, attrj_kp, target_speed 모두 온전히 넘겨줍니다.
         return m_traj_gen.attrl(goal_tmat, attrl_kp, attrj_kp, target_speed);
+    }
+
+    // ---------------------------------------------------------------------
+    // 🌟 신규 추가: playj (다중 웨이포인트 연속/스무딩 이동)
+    // ---------------------------------------------------------------------
+    [[nodiscard]] bool playj(const std::vector<WaypointJ> &waypoints,
+                             const std::optional<angles_t> &user_peak_angvels = std::nullopt,
+                             const std::optional<angles_t> &user_peak_angaccs = std::nullopt,
+                             value_t p_gain = 5.0) noexcept {
+        
+        if (!m_update_timer.is_running()) return false;
+
+        // 속도/가속도 제한이 입력되지 않은 경우, 로봇 모델의 최대 한계치를 기본값으로 사용
+        angles_t peak_vels = user_peak_angvels.value_or(m_model.get_max_angvels());
+        angles_t peak_accs = user_peak_angaccs.value_or(m_model.get_max_angaccs());
+
+        return m_traj_gen.playj(waypoints, peak_vels, peak_accs, p_gain);
     }
 
     [[nodiscard]] bool align_tcp_to_floor(double yaw_deg = 0.0, value_t kp = 100.0) noexcept {

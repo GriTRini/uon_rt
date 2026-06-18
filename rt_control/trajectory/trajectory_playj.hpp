@@ -4,7 +4,7 @@
 #include "../model/model.hpp"
 #include <iostream>
 #include <vector>
-#include <cmath> // std::sqrt 사용
+#include <cmath>
 
 namespace rt_control {
 namespace trajectory {
@@ -30,8 +30,9 @@ class TrajPlayJ {
               const std::vector<WaypointJ> &waypoints,
               const angles_t &user_peak_angvels,
               const angles_t &user_peak_angaccs,
-              value_t p_gain = 5.0) noexcept
-        : m_angles(start_angles), 
+              value_t p_gain = 10.0) noexcept // 유선형을 더 타이트하고 예쁘게 그리기 위해 게인 상향
+        : m_start_angles(start_angles),       // 지나침(Pass-By) 판별용 시작 위치 저장
+          m_angles(start_angles), 
           m_angvels(start_angvels),
           m_angaccs(start_angaccs), 
           m_goal_index(0),
@@ -41,18 +42,16 @@ class TrajPlayJ {
         angles_t hw_max_v = robot->get_max_angvels();
         angles_t hw_max_a = robot->get_max_angaccs();
 
-        angles_t safe_peak_v = user_peak_angvels.cwiseAbs().cwiseMin(hw_max_v);
-        angles_t safe_peak_a = user_peak_angaccs.cwiseAbs().cwiseMin(hw_max_a);
+        m_max_angvels = user_peak_angvels.cwiseAbs().cwiseMin(hw_max_v);
+        m_max_angaccs = user_peak_angaccs.cwiseAbs().cwiseMin(hw_max_a);
 
-        m_max_angvels = safe_peak_v;  m_min_angvels = -safe_peak_v;
-        m_max_angaccs = safe_peak_a;  m_min_angaccs = -safe_peak_a;
         m_min_angles = robot->get_min_angles();
         m_max_angles = robot->get_max_angles();
     }
 
   public:
     void update(const value_t &dt) noexcept {
-        // 이미 모든 웨이포인트를 돌았거나 dt가 비정상일 경우 제로 출력 및 종료
+        // 이미 모든 궤적을 마쳤거나 dt가 비정상일 경우 안전 종료
         if (goal_reached() || dt <= 0.0) {
             m_angvels.setZero();
             m_angaccs.setZero();
@@ -61,68 +60,101 @@ class TrajPlayJ {
 
         angles_t target_angles = m_waypoints[m_goal_index].angles;
         value_t current_attrl = m_waypoints[m_goal_index].attrl;
-
-        // 오차 계산
         angles_t error = target_angles - m_angles;
-        
-        // 현재 타겟이 리스트의 마지막 목적지인지 확인
         bool is_last_wp = (m_goal_index == m_waypoints.size() - 1);
 
+        // =================================================================
+        // 🌟 1. Pass-by & Radius Detection (지나가도 인지하고 넘어가기)
+        // =================================================================
         if (!is_last_wp) {
-            // [중간 경유지] 반경(attrl) 안에 들어오면 즉시 타겟 갱신 (논스톱 패스)
+            bool transition = false;
+            
+            // 조건 A: 정상적으로 attrl 반경 내에 진입한 경우
             if (error.cwiseAbs().maxCoeff() <= current_attrl) {
-                m_goal_index++; 
+                transition = true;
+            } 
+            // 조건 B: 반경에 살짝 못 미쳤으나, 타겟 지점을 앞질러서 스쳐 지나간 경우 (투영 내적)
+            else {
+                angles_t prev_wp = (m_goal_index == 0) ? m_start_angles : m_waypoints[m_goal_index - 1].angles;
+                angles_t seg_vec = target_angles - prev_wp;
+                value_t seg_len_sq = seg_vec.squaredNorm();
+                
+                if (seg_len_sq > 1e-6) {
+                    angles_t rob_vec = m_angles - prev_wp;
+                    // 진행 방향(seg_vec) 위로 로봇 위치를 투영했을 때, 선분 길이를 100% 초과했다면 지나친 것!
+                    if (rob_vec.dot(seg_vec) >= seg_len_sq) {
+                        transition = true;
+                    }
+                }
+            }
+
+            // 타겟 갱신 (논스톱 패스)
+            if (transition) {
+                m_goal_index++;
                 target_angles = m_waypoints[m_goal_index].angles;
                 error = target_angles - m_angles;
-                // 🌟 인덱스가 바뀌었으므로 마지막 목적지인지 다시 확인
-                is_last_wp = (m_goal_index == m_waypoints.size() - 1); 
+                is_last_wp = (m_goal_index == m_waypoints.size() - 1);
             }
         } else {
-            // [최종 목적지] 반경 안에 들어오고 + 속도도 완전히 죽었을 때만 도달(종료) 처리
+            // [최종 목적지] 오버슈트 없이 완전히 멈출 때까지 대기
             bool pos_reached = error.cwiseAbs().maxCoeff() <= current_attrl;
-            bool vel_stopped = m_angvels.cwiseAbs().maxCoeff() <= 0.1; // 0.1 deg/s 이하 정지 간주
+            bool vel_stopped = m_angvels.cwiseAbs().maxCoeff() <= 0.1; // 0.1 deg/s 이하 제동 완료
 
             if (pos_reached && vel_stopped) {
-                m_goal_index++; // 타겟 도달 완료
+                m_goal_index++; 
                 m_angvels.setZero();
                 m_angaccs.setZero();
                 return;
             }
         }
 
-        // 🌟 오버슈트 방지를 위한 속도 계산 및 제동 프로파일 적용
-        angles_t desired_vel;
-        for (int i = 0; i < 6; ++i) {
-            value_t e = error(i);
-            value_t v_p = e * m_p_gain; // 기본 P-제어 속도
-            
-            // 마지막 목적지일 때만 역학적 제동 곡선(Kinematic Braking Bound) 적용
-            if (is_last_wp) {
-                // 1ms 이산 제어 환경의 오버슈트를 막기 위해 가속도 한계의 80%만 브레이크로 사용
-                value_t max_a = m_max_angaccs(i) * 0.8; 
-                value_t v_bound = std::sqrt(2.0 * max_a * std::abs(e));
-                
-                // P-제어 속도가 제동 한계를 넘지 못하도록 클리핑
-                if (v_p > v_bound) v_p = v_bound;
-                if (v_p < -v_bound) v_p = -v_bound;
-            }
-            
-            // 하드웨어 최대/최소 속도 제한 클리핑
-            if (v_p > m_max_angvels(i)) v_p = m_max_angvels(i);
-            if (v_p < m_min_angvels(i)) v_p = m_min_angvels(i);
-            
-            desired_vel(i) = v_p;
+        // =================================================================
+        // 🌟 2. Streamlined Vector Scaling (유선형의 완벽한 궤적 생성)
+        // =================================================================
+        angles_t desired_vel = error * m_p_gain;
+
+        // [Step 2-1] 방향을 100% 유지한 채 속도 스케일링
+        value_t max_v_ratio = 0.0;
+        for(int i = 0; i < 6; ++i) {
+            value_t ratio = std::abs(desired_vel(i)) / m_max_angvels(i);
+            if (ratio > max_v_ratio) max_v_ratio = ratio;
+        }
+        if (max_v_ratio > 1.0) {
+            desired_vel /= max_v_ratio; // 모든 관절의 속도를 동일 비율로 줄임
         }
 
-        // 가속도 산출 및 하드웨어 최대 가속도 제한 클리핑 (Jerk 방지)
+        // [Step 2-2] 최종 목적지 도착 시, 부드러운 제동 곡선 프로파일(Braking) 강제 적용
+        if (is_last_wp) {
+            value_t max_brake_ratio = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                value_t e = std::abs(error(i));
+                value_t max_a = m_max_angaccs(i) * 0.85; // 85% 가속도로 여유있는 제동
+                value_t v_bound = std::sqrt(2.0 * max_a * e);
+                value_t ratio = std::abs(desired_vel(i)) / (v_bound + 1e-6);
+                if (ratio > max_brake_ratio) max_brake_ratio = ratio;
+            }
+            if (max_brake_ratio > 1.0) {
+                desired_vel /= max_brake_ratio;
+            }
+        }
+
+        // [Step 2-3] 방향을 100% 유지한 채 가속도 스케일링 (코너가 아름답게 둥글어지는 핵심)
         angles_t desired_acc = (desired_vel - m_angvels) / dt;
-        m_angaccs = desired_acc.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
+        value_t max_a_ratio = 0.0;
+        for(int i = 0; i < 6; ++i) {
+            value_t ratio = std::abs(desired_acc(i)) / m_max_angaccs(i);
+            if (ratio > max_a_ratio) max_a_ratio = ratio;
+        }
+        if (max_a_ratio > 1.0) {
+            desired_acc /= max_a_ratio; // 모든 관절의 가속도를 동일 비율로 줄임
+        }
 
-        // 상태 업데이트 (적분)
+        // 3. 상태 업데이트 및 적분
+        m_angaccs = desired_acc;
         m_angvels += m_angaccs * dt;
-        m_angvels = m_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
-
         m_angles += m_angvels * dt;
+
+        // 최종 하드웨어 한계 보호
         m_angles = m_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
     }
 
@@ -139,6 +171,7 @@ class TrajPlayJ {
     [[nodiscard]] const angles_t &angaccs() const noexcept { return m_angaccs; }
 
   protected:
+    angles_t m_start_angles; // 궤적 시작 위치 기록용
     angles_t m_angles, m_angvels, m_angaccs;
     size_t m_goal_index;
     
@@ -146,8 +179,7 @@ class TrajPlayJ {
     value_t m_p_gain;
 
     angles_t m_min_angles, m_max_angles;
-    angles_t m_min_angvels, m_max_angvels;
-    angles_t m_min_angaccs, m_max_angaccs;
+    angles_t m_max_angvels, m_max_angaccs;
 };
 
 } // namespace trajectory

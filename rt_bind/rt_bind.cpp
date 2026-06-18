@@ -1,13 +1,31 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
-#include <pybind11/chrono.h> // 🌟 추가: std::chrono 시간 객체를 파이썬 datetime으로 변환
+#include <pybind11/chrono.h> 
 
 #include "trajectory/rtb_trajectory_generator.hpp"
 #include "core/rtb_robot_base.hpp"
 #include "../rt_control/model/model.hpp" 
 
 namespace py = pybind11;
+
+// 🌟 공통 헬퍼 함수: 파이썬 웨이포인트 리스트(dict)를 C++ 벡터로 파싱
+std::vector<rt_control::trajectory::WaypointJ> parse_waypoints(py::list wp_list) {
+    std::vector<rt_control::trajectory::WaypointJ> waypoints;
+    for (py::handle item : wp_list) {
+        py::dict dict = item.cast<py::dict>();
+        
+        // 'q' 키의 배열 데이터를 Eigen으로 매핑
+        py::array_t<double> q_arr = dict["q"].cast<py::array_t<double>>();
+        rt_control::angles_t q = Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(q_arr.data());
+        
+        // 'attrl' 키의 스칼라 데이터 추출
+        double attrl = dict["attrl"].cast<double>();
+        
+        waypoints.push_back({q, attrl});
+    }
+    return waypoints;
+}
 
 PYBIND11_MODULE(rt_bind, m) {
     m.doc() = "uon robotics unified control library (Full Features & Keyword Arguments)";
@@ -17,6 +35,7 @@ PYBIND11_MODULE(rt_bind, m) {
         .value("STOP", rt_control::trajectory::TrajState::STOP)
         .value("TRAPJ", rt_control::trajectory::TrajState::TRAPJ)
         .value("ATTRL", rt_control::trajectory::TrajState::ATTRL)
+        .value("PLAYJ", rt_control::trajectory::TrajState::PLAYJ) // 🌟 PLAYJ 열거형 추가
         .export_values();
 
     // 2. RobotModel
@@ -24,14 +43,13 @@ PYBIND11_MODULE(rt_bind, m) {
         .def(py::init<const std::string&>())
         .def("get_model_name", &rt_control::model::RobotModel::get_model_name);
 
-    // 🌟 추가: RobotAlarm 구조체 바인딩
+    // RobotAlarm 구조체 바인딩
     py::class_<rt_control::RobotAlarm>(m, "RobotAlarm")
         .def_readonly("time", &rt_control::RobotAlarm::time)
         .def_readonly("level", &rt_control::RobotAlarm::level)
         .def_readonly("group", &rt_control::RobotAlarm::group)
         .def_readonly("index", &rt_control::RobotAlarm::index)
         .def_property_readonly("param", [](const rt_control::RobotAlarm& self) {
-            // C++ 배열 param[3]을 파이썬 튜플로 깔끔하게 변환해서 반환
             return py::make_tuple(self.param[0], self.param[1], self.param[2]);
         });
 
@@ -46,6 +64,16 @@ PYBIND11_MODULE(rt_bind, m) {
              py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r"), py::arg("p"), py::arg("yaw"))
         .def("trapj", &rtb::trajectory::TrajGenerator::trapj_py, 
              py::arg("goal_q"), py::arg("goal_dq") = py::none())
+        
+        // 🌟 신규 추가: playj (시뮬레이션 용)
+        .def("playj", [](rtb::trajectory::TrajGenerator& self, 
+                         py::list wp_list, 
+                         std::optional<py::array_t<double>> user_vels, 
+                         std::optional<py::array_t<double>> user_accs, 
+                         double p_gain) {
+            return self.playj_py(parse_waypoints(wp_list), user_vels, user_accs, p_gain);
+        }, py::arg("waypoints"), py::arg("peak_vels") = py::none(), py::arg("peak_accs") = py::none(), py::arg("p_gain") = 5.0)
+
         .def("attrl", &rtb::trajectory::TrajGenerator::attrl_py, 
              py::arg("goal_tmat"), py::arg("attrl_kp") = 50.0, py::arg("attrj_kp") = 150.0, py::arg("target_speed") = 0.20)
         .def("align_to_floor", &rtb::trajectory::TrajGenerator::align_tcp_to_floor_py, 
@@ -63,8 +91,7 @@ PYBIND11_MODULE(rt_bind, m) {
     py::class_<rt_control::RobotBase, std::unique_ptr<rt_control::RobotBase>>(m, "RobotBase")
         // 연결/통신
         .def("open_connection", &rt_control::RobotBase::open_connection, 
-             py::arg("ip") = "", py::arg("port") = 0) // 기본값을 Base 선언에 맞춤
-        .def("close_connection", &rt_control::RobotBase::close_connection)
+             py::arg("ip") = "", py::arg("port") = 0)
         .def("close_connection", &rt_control::RobotBase::close_connection)
         .def("connect_rt", &rt_control::RobotBase::connect_rt, 
              py::arg("ip") = "", py::arg("port") = 0)
@@ -81,15 +108,11 @@ PYBIND11_MODULE(rt_bind, m) {
         // 설정
         .def("set_tcp", &rt_control::RobotBase::set_tcp,
              py::arg("x"), py::arg("y"), py::arg("z"), py::arg("r_deg"), py::arg("p_deg"), py::arg("yaw_deg"))
-        
-        // 🌟 추가: Tool 설정 관련 바인딩
         .def("add_tool", &rt_control::RobotBase::add_tool,
              py::arg("name"), py::arg("weight"), py::arg("cog"), py::arg("inertia"))
         .def("set_tool", &rt_control::RobotBase::set_tool, py::arg("name"))
         .def("del_tool", &rt_control::RobotBase::del_tool, py::arg("name"))
         .def("change_collision_sensitivity", &rt_control::RobotBase::change_collision_sensitivity, py::arg("sensitivity"))
-
-        // 🌟 추가: 알람(Error) 처리 바인딩
         .def("pop_alarm", &rt_control::RobotBase::pop_alarm)
 
         // 궤적 생성 및 제어
@@ -99,21 +122,40 @@ PYBIND11_MODULE(rt_bind, m) {
             return self.trapj(m_q);
         }, py::arg("goal_q"))
 
-        // attrl (행렬 입력 방식)
+        // 🌟 신규 추가: playj (실제 로봇 제어 용)
+        .def("playj", [](rt_control::RobotBase& self, 
+                         py::list wp_list, 
+                         std::optional<py::array_t<double>> user_vels, 
+                         std::optional<py::array_t<double>> user_accs, 
+                         double p_gain) {
+            
+            // 1. 파이썬 속도/가속도 배열을 C++ (Eigen) 타입으로 변환
+            std::optional<rt_control::angles_t> opt_vels = std::nullopt;
+            if (user_vels.has_value()) {
+                opt_vels = Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(user_vels->data());
+            }
+
+            std::optional<rt_control::angles_t> opt_accs = std::nullopt;
+            if (user_accs.has_value()) {
+                opt_accs = Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(user_accs->data());
+            }
+
+            // 2. 파서 호출 후 RobotBase의 playj 실행
+            return self.playj(parse_waypoints(wp_list), opt_vels, opt_accs, p_gain);
+        }, py::arg("waypoints"), py::arg("peak_vels") = py::none(), py::arg("peak_accs") = py::none(), py::arg("p_gain") = 5.0)
+
+        // attrl
         .def("attrl", [](rt_control::RobotBase& self, const Eigen::Ref<const Eigen::Matrix4d>& goal_tmat, double attrl_kp, double attrj_kp, double target_speed) {
             Eigen::Isometry3d target; 
             target.matrix() = goal_tmat; 
-            // 🌟 수정 포인트: attrl_kp(작업공간)와 attrj_kp(조인트)를 분리해서 C++ 함수로 전달
             return self.attrl(target, attrl_kp, attrj_kp, target_speed);
         }, py::arg("goal_tmat"), py::arg("attrl_kp") = 50.0, py::arg("attrj_kp") = 150.0, py::arg("target_speed") = 0.20)
 
         // 정렬 및 상태 확인
         .def("align_to_floor", &rt_control::RobotBase::align_tcp_to_floor, 
              py::arg("yaw_deg") = 0.0, py::arg("kp") = 100.0)
-        // 🌟 추가: 정면 정렬 바인딩
         .def("align_to_front", &rt_control::RobotBase::align_tcp_to_front, 
              py::arg("kp") = 100.0)
-        // 🌟 물리적 안착(Settling)을 확인하는 goal_reached
         .def("goal_reached", [](const rt_control::RobotBase& self, 
                                 std::optional<double> q_th, 
                                 std::optional<double> p_th, 
@@ -126,7 +168,6 @@ PYBIND11_MODULE(rt_bind, m) {
         py::arg("r_th") = py::none(),
         py::arg("v_th") = py::none())
         
-        // 🌟 추가: Forward Kinematics 바인딩
         .def("solve_forward", [](rt_control::RobotBase& self, const py::array_t<double>& q) {
             Eigen::Map<const rt_control::angles_t, Eigen::Unaligned> m_q(q.data());
             return rtb::to_pyarray(self.solve_forward(m_q));
@@ -137,7 +178,6 @@ PYBIND11_MODULE(rt_bind, m) {
             auto q = self.get_current_angles();
             return q ? rtb::to_pyarray(*q) : py::cast<py::object>(py::none());
         })
-        // 🌟 추가: 현재 각속도 반환
         .def_property_readonly("angvels", [](rt_control::RobotBase& self) {
             auto dq = self.get_current_angvels();
             return dq ? rtb::to_pyarray(*dq) : py::cast<py::object>(py::none());
@@ -148,11 +188,9 @@ PYBIND11_MODULE(rt_bind, m) {
         .def_property_readonly("flange_tmat", [](rt_control::RobotBase& self) {
             return rtb::to_pyarray(self.get_current_flange_pos());
         })
-        // 🌟 추가: 자코비안 행렬 반환
         .def_property_readonly("jmat", [](rt_control::RobotBase& self) {
             return rtb::to_pyarray(self.get_jacobian());
         })
-        // 🌟 추가: Task Velocity 반환
         .def_property_readonly("task_vel", [](rt_control::RobotBase& self) {
             return rtb::to_pyarray(self.get_task_vel());
         });

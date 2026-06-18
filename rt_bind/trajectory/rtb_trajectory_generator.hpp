@@ -1,11 +1,13 @@
 #pragma once
 
 #include "../core/rtb_core.hpp"
+#include <vector> // 추가
 
 namespace rtb {
 namespace trajectory {
 
 using TrajState = rt_control::trajectory::TrajState;
+using WaypointJ = rt_control::trajectory::WaypointJ; // 추가
 
 class TrajGenerator : public rt_control::trajectory::TrajGenerator {
 public:
@@ -42,16 +44,34 @@ public:
         return Base::trapj(m_gq, m_gdq);
     }
 
-    // 4. [Task Space] AttrL & Align (🌟 행렬 매핑 수정됨)
+    // ---------------------------------------------------------------------
+    // 🌟 신규 추가: [Joint Space] PlayJ (시뮬레이션 용)
+    // 파이썬 리스트(dict)를 파싱하는 부분은 Pybind 단에서 처리하고 여기선 파싱된 vector를 받음
+    // ---------------------------------------------------------------------
+    bool playj_py(const std::vector<WaypointJ>& waypoints,
+                  const std::optional<py::array_t<double>>& user_peak_vels = std::nullopt,
+                  const std::optional<py::array_t<double>>& user_peak_accs = std::nullopt,
+                  double p_gain = 5.0) 
+    {
+        // 속도/가속도 한계가 입력되었다면 Eigen으로 매핑, 없으면 로봇 모델 최대치 사용
+        rt_control::angles_t peak_vels = user_peak_vels.has_value() 
+                                         ? Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(user_peak_vels->data()) 
+                                         : m_model.get_max_angvels();
+                                         
+        rt_control::angles_t peak_accs = user_peak_accs.has_value() 
+                                         ? Eigen::Map<const rt_control::angles_t, Eigen::Unaligned>(user_peak_accs->data()) 
+                                         : m_model.get_max_angaccs();
+
+        return Base::playj(waypoints, peak_vels, peak_accs, p_gain);
+    }
+
+    // 4. [Task Space] AttrL & Align
     bool attrl_py(const py::array_t<double>& goal_tmat, double attrl_kp = 50.0, double attrj_kp = 150.0, double target_speed = 0.20) {
-        // NumPy(RowMajor) 데이터를 Eigen이 오해하지 않도록 RowMajor 레이아웃을 명시합니다.
         Eigen::Map<const Eigen::Matrix<double, 4, 4, Eigen::RowMajor>> map_t(goal_tmat.data());
         
-        // Isometry3d에 대입하면 Eigen 내부적으로 최적화된 ColumnMajor 형태로 변환됩니다.
         Eigen::Isometry3d target; 
         target.matrix() = map_t; 
         
-        // 🌟 수정 포인트: attrl_kp(작업공간 게인), attrj_kp(조인트 게인), target_speed를 모두 Base::attrl로 전달합니다.
         return Base::attrl(target, attrl_kp, attrj_kp, target_speed);
     }
 

@@ -44,32 +44,43 @@ int main() {
     std::cout << "✅ 로봇 초기화 및 TCP 설정 완료 (Z축 +0.25m)" << std::endl;
 
     // ==========================================================
-    // [웨이포인트 정의] - CSV 기록을 위해 먼저 정의
+    // [10개의 다이내믹 웨이포인트 정의] 
     // ==========================================================
     std::vector<WaypointJ> waypoints;
-    angles_t q_wp1, q_wp2, q_wp3;
-    q_wp1 << 97.64, -90.0, -80.0, -73.42, 88.9, 8.74;
-    q_wp2 << 45.0, -95.0, -85.0, -60.0, 90.0, 0.0;
-    q_wp3 << 0.0, -100.0, -90.0, -50.0, 90.0, 0.0;
+    angles_t q;
 
-    waypoints.push_back({q_wp1, 0.15});
-    waypoints.push_back({q_wp2, 0.20});
-    waypoints.push_back({q_wp3, 0.005});
+    // J1을 90도에서 -45도까지 쓸어내리며, J2/J3가 출렁이는 궤적
+    q << 90.0, -95.0, -85.0, -70.0, 90.0, 10.0; waypoints.push_back({q, 0.3}); // WP 1
+    q << 75.0, -90.0, -80.0, -65.0, 90.0,  5.0; waypoints.push_back({q, 0.3}); // WP 2
+    q << 60.0, -85.0, -75.0, -60.0, 90.0,  0.0; waypoints.push_back({q, 0.3}); // WP 3 (가속 구간, 반경 큼)
+    q << 45.0, -90.0, -80.0, -55.0, 90.0, -5.0; waypoints.push_back({q, 0.3}); // WP 4
+    q << 30.0, -95.0, -85.0, -50.0, 90.0,-10.0; waypoints.push_back({q, 0.3}); // WP 5
+    q << 15.0,-100.0, -90.0, -45.0, 90.0, -5.0; waypoints.push_back({q, 0.3}); // WP 6
+    q <<  0.0,-105.0, -95.0, -40.0, 90.0,  0.0; waypoints.push_back({q, 0.3}); // WP 7
+    q <<-15.0,-100.0, -90.0, -45.0, 90.0,  5.0; waypoints.push_back({q, 0.3}); // WP 8
+    q <<-30.0, -95.0, -85.0, -50.0, 90.0, 10.0; waypoints.push_back({q, 0.3}); // WP 9 (감속 진입, 반경 줄임)
+    
+    // 🌟 마지막 10번째 웨이포인트 (반경 0.005로 정확히 정지)
+    q <<-45.0, -90.0, -80.0, -55.0, 90.0,  0.0; waypoints.push_back({q, 0.005}); // WP 10 
 
     // ==========================================================
-    // [CSV 로깅 파일 오픈 및 헤더 기록]
+    // [CSV 로깅 파일 오픈 및 자동 헤더 기록]
     // ==========================================================
     std::ofstream csv("playj_test_log.csv");
     csv << std::fixed << std::setprecision(6);
     
-    // 🌟 웨이포인트를 CSV 파일 상단에 메타데이터로 저장
+    // 🌟 웨이포인트 벡터를 순회하며 자동으로 CSV 상단 메타데이터 생성
     csv << "# [WAYPOINTS]\n";
     csv << "# WP_Index,J1,J2,J3,J4,J5,J6,AttrL\n";
-    csv << "# 1," << q_wp1(0) << "," << q_wp1(1) << "," << q_wp1(2) << "," << q_wp1(3) << "," << q_wp1(4) << "," << q_wp1(5) << ",0.15\n";
-    csv << "# 2," << q_wp2(0) << "," << q_wp2(1) << "," << q_wp2(2) << "," << q_wp2(3) << "," << q_wp2(4) << "," << q_wp2(5) << ",0.20\n";
-    csv << "# 3," << q_wp3(0) << "," << q_wp3(1) << "," << q_wp3(2) << "," << q_wp3(3) << "," << q_wp3(4) << "," << q_wp3(5) << ",0.005\n";
+    for (size_t i = 0; i < waypoints.size(); ++i) {
+        csv << "# " << (i + 1);
+        for (int j = 0; j < 6; ++j) {
+            csv << "," << waypoints[i].angles(j);
+        }
+        csv << "," << waypoints[i].attrl << "\n";
+    }
     
-    // 🌟 실제 데이터 시작 지점 마커
+    // 실제 데이터 시작 지점 마커
     csv << "# [LOG_DATA]\n";
     csv << "Time,Mode,TCP_X,TCP_Y,TCP_Z,Flange_X,Flange_Y,Flange_Z,J1,J2,J3,J4,J5,J6\n";
 
@@ -92,21 +103,23 @@ int main() {
     std::cout << " -> Home 도달 완료!" << std::endl;
 
     // ==========================================================
-    // [Step 2] 3개의 웨이포인트를 연속으로 부드럽게 지나는 PLAYJ 실행
+    // [Step 2] 10개의 웨이포인트를 연속으로 부드럽게 지나는 PLAYJ 실행
     // ==========================================================
-    std::cout << "\nStep 2: 다중 웨이포인트 연속 이동 (PLAYJ)" << std::endl;
+    std::cout << "\nStep 2: 10개 다중 웨이포인트 연속 스무딩 이동 (PLAYJ)" << std::endl;
 
+    // 로봇 스펙의 50% 속도/가속도 활용
     angles_t peak_vels = model.get_max_angvels() * 0.5;
     angles_t peak_accs = model.get_max_angaccs() * 0.5;
 
     traj_gen.playj(waypoints, peak_vels, peak_accs, 5.0);
 
-    test_duration = 15.0; 
+    // 포인트가 늘어났으므로 넉넉하게 25초 대기 허용
+    test_duration = 25.0; 
     start_time = current_time;
 
     while (current_time - start_time < test_duration) {
         traj_gen.update(dt);
-        log_data(csv, current_time, 2, traj_gen); 
+        log_data(csv, current_time, 2, traj_gen); // Mode 2: PLAYJ
         current_time += dt;
         
         if (traj_gen.goal_reached()) {

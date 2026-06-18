@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Optional, List
+from typing import Optional, List, Dict, Any  # 🌟 Dict, Any 추가
 import datetime
 import rt_bind as _rtb
 
@@ -99,6 +99,23 @@ class Robot:
     def trapj(self, goal_q: npt.NDArray) -> bool:
         """관절 공간 사다리꼴 궤적 이동 명령 (Non-blocking)"""
         return self._impl.trapj(goal_q)
+
+    # 🌟 신규 추가: playj 파이썬 바인딩 함수
+    def playj(self, waypoints: List[Dict[str, Any]], peak_vels: Optional[npt.NDArray] = None, peak_accs: Optional[npt.NDArray] = None, p_gain: float = 5.0) -> bool:
+        """
+        다중 웨이포인트를 멈춤 없이 부드럽게 연속으로 이동하는 제어 명령 (Corner Blending)
+        
+        Args:
+            waypoints: 각도(q)와 블렌딩 반경(attrl)을 담은 딕셔너리 리스트. 
+                       예: [{"q": np.array([...]), "attrl": 0.15}, ...]
+            peak_vels: 조인트 최대 속도 한계 배열. None이면 로봇의 물리적 한계 자동 사용.
+            peak_accs: 조인트 최대 가속도 한계 배열. None이면 로봇의 물리적 한계 자동 사용.
+            p_gain: 궤적 추종 위치 게인. 값이 클수록 타겟에 더 빨리 붙음. (기본값: 5.0)
+            
+        Returns:
+            bool: 명령 수락 여부
+        """
+        return self._impl.playj(waypoints, peak_vels, peak_accs, p_gain)
 
     def attrl(self, goal_tmat: npt.NDArray, attrl_kp: float = 50.0, attrj_kp: float = 150.0, target_speed: float = 0.20) -> bool:
         """작업 공간 어트랙터 기반 이동 명령
