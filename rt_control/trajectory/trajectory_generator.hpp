@@ -108,6 +108,7 @@ class TrajGenerator {
         m_gen_stop = TrajStop(m_angles, m_angvels, m_angaccs);
         m_traj_state = traj_state_t::STOPPING;
     }
+    
     // 1. 관절 각도 오차 (L2 Norm, deg)
     [[nodiscard]] std::optional<value_t> angles_enorm() const noexcept {
         auto gq = goal_angles();
@@ -150,7 +151,7 @@ class TrajGenerator {
         if (m_traj_state == traj_state_t::STOP) return m_angles;
         if (m_traj_state == traj_state_t::STOPPING) return m_gen_stop.goal_angles();
         if (m_traj_state == traj_state_t::TRAPJ) return m_gen_trapj.goal_angles();
-        // ATTRL 상태에서는 실시간으로 목표 각도가 변하므로 특정 목표 각도가 고정되어 있지 않음
+        // ATTRL, PLAYJ 상태에서는 실시간으로 목표 각도가 변하므로 특정 목표 각도가 고정되어 있지 않음
         return std::nullopt;
     }
 
@@ -160,6 +161,9 @@ class TrajGenerator {
     [[nodiscard]] std::optional<tmat_t> goal_tmat() const noexcept {
         if (m_traj_state == traj_state_t::ATTRL) {
             return m_gen_attrl.goal_pose();
+        }
+        if (m_traj_state == traj_state_t::PLAYJ) {
+            return std::nullopt; // PLAYJ 진행 중에는 위치 기반 오차 검사 무시
         }
         // Joint 기반 제어 중일 때는 목표 각도를 Forward Kinematics로 변환해서 반환
         auto gq = goal_angles();
@@ -197,6 +201,24 @@ class TrajGenerator {
 
         // 3. 상태 변경 및 실행
         m_traj_state = traj_state_t::ATTRL;
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // 🌟 웨이포인트 리스트를 받아 실행하는 playj 활성화
+    // ---------------------------------------------------------------------
+    [[nodiscard]] bool playj(const std::vector<WaypointJ> &waypoints,
+                             const angles_t &user_peak_angvels,
+                             const angles_t &user_peak_angaccs,
+                             value_t p_gain = 5.0) noexcept {
+        if (waypoints.empty()) {
+            std::cerr << "[Error] playj: 웨이포인트 리스트가 비어 있습니다." << std::endl;
+            return false;
+        }
+
+        m_gen_playj = TrajPlayJ(&m_model, m_angles, m_angvels, m_angaccs, waypoints,
+                                user_peak_angvels, user_peak_angaccs, p_gain);
+        m_traj_state = traj_state_t::PLAYJ;
         return true;
     }
     
@@ -261,6 +283,7 @@ class TrajGenerator {
     [[nodiscard]] const angles_t& angles() const noexcept { return m_angles; }
     [[nodiscard]] const tmat_t& tmat() const noexcept { return m_tmat; }
     [[nodiscard]] tmat_t flange_tmat() const noexcept { return m_tmat * m_tcp_offset.inverse(); }
+    
     [[nodiscard]] constexpr bool goal_reached(
         const std::optional<value_t> &angles_enorm_thold = 2.0,
         const std::optional<value_t> &pos_enorm_thold = 0.002,
@@ -269,63 +292,49 @@ class TrajGenerator {
         const std::optional<value_t> &vel_enorm_thold = 0.004,
         const std::optional<value_t> &w_enorm_thold = 6.0) const noexcept 
     {
-        // 이미 정지 상태인 경우 즉시 true 반환
+        // 1. 이미 궤적이 끝나서 STOP 상태가 된 경우 정상적으로 완료(true) 반환
         if (m_traj_state == traj_state_t::STOP) return true;
 
-        auto reached = false;
+        // 🌟 2. 버그 수정: PLAYJ 모드 진행 중에는 무조건 false 반환
+        // (마지막 웨이포인트에 도달하면 update() 함수 내부에서 자동으로 STOP 상태로 전환됨)
+        if (m_traj_state == traj_state_t::PLAYJ) return false;
 
-        // 1. Joint Angle Error Check
+        auto reached = true; // 기본적으로 true로 두고, 오차 범위를 하나라도 벗어나면 false로 변경
+
+        // 3. Joint Angle Error Check
         if (angles_enorm_thold.has_value()) {
-            const auto trg = this->angles_enorm(); // 멤버 함수 호출
-            if (trg.has_value() && trg.value() > angles_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            const auto trg = this->angles_enorm();
+            if (trg.has_value() && trg.value() > angles_enorm_thold.value()) return false;
         }
 
-        // 2. Position Error Check (m)
+        // 4. Position Error Check (m)
         if (pos_enorm_thold.has_value()) {
             const auto trg = this->pos_enorm();
-            if (trg.has_value() && trg.value() > pos_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            if (trg.has_value() && trg.value() > pos_enorm_thold.value()) return false;
         }
 
-        // 3. Rotation Error Check (deg)
+        // 5. Rotation Error Check (deg)
         if (rot_enorm_thold.has_value()) {
             const auto trg = this->rot_enorm();
-            if (trg.has_value() && trg.value() > rot_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            if (trg.has_value() && trg.value() > rot_enorm_thold.value()) return false;
         }
 
-        // 4. Joint Velocity Error Check
+        // 6. Joint Velocity Error Check
         if (angvels_enorm_thold.has_value()) {
             const auto trg = this->angvels_enorm();
-            if (trg.has_value() && trg.value() > angvels_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            if (trg.has_value() && trg.value() > angvels_enorm_thold.value()) return false;
         }
 
-        // 5. Cartesian Velocity Error Check
+        // 7. Cartesian Velocity Error Check
         if (vel_enorm_thold.has_value()) {
             const auto trg = this->vel_enorm();
-            if (trg.has_value() && trg.value() > vel_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            if (trg.has_value() && trg.value() > vel_enorm_thold.value()) return false;
         }
 
-        // 6. Angular Velocity Error Check
+        // 8. Angular Velocity Error Check
         if (w_enorm_thold.has_value()) {
             const auto trg = this->w_enorm();
-            if (trg.has_value() && trg.value() > w_enorm_thold.value()) {
-                return false;
-            }
-            reached = true;
+            if (trg.has_value() && trg.value() > w_enorm_thold.value()) return false;
         }
 
         return reached;
@@ -352,9 +361,14 @@ class TrajGenerator {
         if (!m_gen_attrl.update(dt)) stop();
         else copy_state(m_gen_attrl);
     }
+    
+    // 🌟 PLAYJ 상태 전이 추가 (모든 웨이포인트를 다 돌면 STOP으로 전이)
     void update_playj(const value_t &dt) noexcept {
         m_gen_playj.update(dt);
         copy_state(m_gen_playj);
+        if (m_gen_playj.goal_reached()) {
+            m_traj_state = traj_state_t::STOP;
+        }
     }
 
     template<typename T> void copy_state(const T& gen) {

@@ -3,17 +3,22 @@
 #include "../core/core.hpp"
 #include "../model/model.hpp"
 #include <iostream>
-#include <optional>
+#include <vector>
+#include <cmath> // std::sqrt 사용
 
 namespace rt_control {
 namespace trajectory {
+
+// 1. 웨이포인트 구조체 정의
+struct WaypointJ {
+    rt_control::angles_t angles; // 6축 조인트 각도 (q)
+    rt_control::value_t attrl;   // 블렌딩 반경 (이 오차 내에 들어오면 다음 목표로 전환)
+};
 
 class TrajPlayJ {
   public:
     using angles_t = rt_control::angles_t;
     using value_t = rt_control::value_t;
-    // N개의 웨이포인트를 담는 Nx6 동적 행렬 타입
-    using angles_set_t = Eigen::Matrix<value_t, Eigen::Dynamic, 6>; 
 
   public:
     TrajPlayJ() = default;
@@ -22,30 +27,19 @@ class TrajPlayJ {
               const angles_t &start_angles, 
               const angles_t &start_angvels,
               const angles_t &start_angaccs, 
-              const angles_set_t &goal_angles_set,
-              const std::optional<angles_set_t> &goal_angvels_set,
-              const std::optional<angles_set_t> &goal_angaccs_set,
+              const std::vector<WaypointJ> &waypoints,
               const angles_t &user_peak_angvels,
-              const angles_t &user_peak_angaccs) noexcept
+              const angles_t &user_peak_angaccs,
+              value_t p_gain = 5.0) noexcept
         : m_angles(start_angles), 
           m_angvels(start_angvels),
           m_angaccs(start_angaccs), 
           m_goal_index(0),
-          m_goal_angles_set(goal_angles_set),
-          m_goal_angvels_set(goal_angvels_set),
-          m_goal_angaccs_set(goal_angaccs_set)
+          m_waypoints(waypoints),
+          m_p_gain(p_gain)
     {
-        // 🌟 1. 하드웨어 한계값 가져오기
         angles_t hw_max_v = robot->get_max_angvels();
         angles_t hw_max_a = robot->get_max_angaccs();
-
-        // 🌟 2. 안전 클리핑 및 경고 알림 로직
-        if ((user_peak_angvels.cwiseAbs().array() > hw_max_v.array()).any()) {
-            std::cerr << "[경고] PlayJ: 조인트 최대 속도가 로봇 한계를 초과하여 자동 수정되었습니다.\n";
-        }
-        if ((user_peak_angaccs.cwiseAbs().array() > hw_max_a.array()).any()) {
-            std::cerr << "[경고] PlayJ: 조인트 최대 가속도가 로봇 한계를 초과하여 자동 수정되었습니다.\n";
-        }
 
         angles_t safe_peak_v = user_peak_angvels.cwiseAbs().cwiseMin(hw_max_v);
         angles_t safe_peak_a = user_peak_angaccs.cwiseAbs().cwiseMin(hw_max_a);
@@ -58,42 +52,86 @@ class TrajPlayJ {
 
   public:
     void update(const value_t &dt) noexcept {
-        if (goal_reached() || dt <= 0.0) return;
-
-        // 현재 인덱스의 웨이포인트(행 벡터) 추출
-        angles_t new_angles = m_goal_angles_set.row(m_goal_index);
-
-        // 속도가 주어지면 그대로 쓰고, 없으면 이전 스텝과의 미분으로 계산
-        angles_t new_angvels;
-        if (m_goal_angvels_set.has_value()) {
-            new_angvels = m_goal_angvels_set.value().row(m_goal_index);
-        } else {
-            new_angvels = (new_angles - m_angles) / dt;
+        // 이미 모든 웨이포인트를 돌았거나 dt가 비정상일 경우 제로 출력 및 종료
+        if (goal_reached() || dt <= 0.0) {
+            m_angvels.setZero();
+            m_angaccs.setZero();
+            return;
         }
 
-        // 가속도가 주어지면 그대로 쓰고, 없으면 미분으로 계산
-        angles_t new_angaccs;
-        if (m_goal_angaccs_set.has_value()) {
-            new_angaccs = m_goal_angaccs_set.value().row(m_goal_index);
+        angles_t target_angles = m_waypoints[m_goal_index].angles;
+        value_t current_attrl = m_waypoints[m_goal_index].attrl;
+
+        // 오차 계산
+        angles_t error = target_angles - m_angles;
+        
+        // 현재 타겟이 리스트의 마지막 목적지인지 확인
+        bool is_last_wp = (m_goal_index == m_waypoints.size() - 1);
+
+        if (!is_last_wp) {
+            // [중간 경유지] 반경(attrl) 안에 들어오면 즉시 타겟 갱신 (논스톱 패스)
+            if (error.cwiseAbs().maxCoeff() <= current_attrl) {
+                m_goal_index++; 
+                target_angles = m_waypoints[m_goal_index].angles;
+                error = target_angles - m_angles;
+                // 🌟 인덱스가 바뀌었으므로 마지막 목적지인지 다시 확인
+                is_last_wp = (m_goal_index == m_waypoints.size() - 1); 
+            }
         } else {
-            new_angaccs = (new_angvels - m_angvels) / dt;
+            // [최종 목적지] 반경 안에 들어오고 + 속도도 완전히 죽었을 때만 도달(종료) 처리
+            bool pos_reached = error.cwiseAbs().maxCoeff() <= current_attrl;
+            bool vel_stopped = m_angvels.cwiseAbs().maxCoeff() <= 0.1; // 0.1 deg/s 이하 정지 간주
+
+            if (pos_reached && vel_stopped) {
+                m_goal_index++; // 타겟 도달 완료
+                m_angvels.setZero();
+                m_angaccs.setZero();
+                return;
+            }
         }
 
-        // 한계값 클리핑 (Clipping)
-        m_angles  = new_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
-        m_angvels = new_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
-        m_angaccs = new_angaccs.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
+        // 🌟 오버슈트 방지를 위한 속도 계산 및 제동 프로파일 적용
+        angles_t desired_vel;
+        for (int i = 0; i < 6; ++i) {
+            value_t e = error(i);
+            value_t v_p = e * m_p_gain; // 기본 P-제어 속도
+            
+            // 마지막 목적지일 때만 역학적 제동 곡선(Kinematic Braking Bound) 적용
+            if (is_last_wp) {
+                // 1ms 이산 제어 환경의 오버슈트를 막기 위해 가속도 한계의 80%만 브레이크로 사용
+                value_t max_a = m_max_angaccs(i) * 0.8; 
+                value_t v_bound = std::sqrt(2.0 * max_a * std::abs(e));
+                
+                // P-제어 속도가 제동 한계를 넘지 못하도록 클리핑
+                if (v_p > v_bound) v_p = v_bound;
+                if (v_p < -v_bound) v_p = -v_bound;
+            }
+            
+            // 하드웨어 최대/최소 속도 제한 클리핑
+            if (v_p > m_max_angvels(i)) v_p = m_max_angvels(i);
+            if (v_p < m_min_angvels(i)) v_p = m_min_angvels(i);
+            
+            desired_vel(i) = v_p;
+        }
 
-        // 다음 1ms 스텝을 위해 인덱스 증가
-        m_goal_index++;
+        // 가속도 산출 및 하드웨어 최대 가속도 제한 클리핑 (Jerk 방지)
+        angles_t desired_acc = (desired_vel - m_angvels) / dt;
+        m_angaccs = desired_acc.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
+
+        // 상태 업데이트 (적분)
+        m_angvels += m_angaccs * dt;
+        m_angvels = m_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
+
+        m_angles += m_angvels * dt;
+        m_angles = m_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
     }
 
     [[nodiscard]] bool goal_reached() const noexcept {
-        return m_goal_index >= goal_length();
+        return m_goal_index >= m_waypoints.size();
     }
 
     [[nodiscard]] size_t goal_length() const noexcept {
-        return m_goal_angles_set.rows();
+        return m_waypoints.size();
     }
 
     [[nodiscard]] const angles_t &angles() const noexcept { return m_angles; }
@@ -104,9 +142,8 @@ class TrajPlayJ {
     angles_t m_angles, m_angvels, m_angaccs;
     size_t m_goal_index;
     
-    angles_set_t m_goal_angles_set;
-    std::optional<angles_set_t> m_goal_angvels_set;
-    std::optional<angles_set_t> m_goal_angaccs_set;
+    std::vector<WaypointJ> m_waypoints;
+    value_t m_p_gain;
 
     angles_t m_min_angles, m_max_angles;
     angles_t m_min_angvels, m_max_angvels;

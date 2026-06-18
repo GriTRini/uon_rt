@@ -17,12 +17,12 @@ class TrajAttrJ {
   public:
     TrajAttrJ() = default;
 
-    // 🌟 수정 포인트: 마지막 인자 이름을 명시적으로 'attrj_kp'로 변경
+    // 🌟 attrj_zeta 기본값 1.2 적용
     TrajAttrJ(const angles_t &q, const angles_t &dq, const angles_t &ddq,
               const angles_t &min_q, const angles_t &max_q,
               const angles_t &min_dq, const angles_t &max_dq,
               const angles_t &min_ddq, const angles_t &max_ddq,
-              value_t attrj_kp = 150.0) noexcept
+              value_t attrj_kp = 150.0, value_t attrj_zeta = 1.2) noexcept
         : m_angles(q), m_angvels(dq), m_angaccs(ddq),
           m_min_angles(min_q), m_max_angles(max_q),
           m_min_angvels(min_dq), m_max_angvels(max_dq),
@@ -31,37 +31,27 @@ class TrajAttrJ {
         m_goal_angles = q;
         m_goal_angvels = angles_t::Zero();
         
-        // 🌟 전달받은 attrj_kp 값으로 조인트 PD 제어 게인 설정
-        set_kp(attrj_kp);
+        set_kp(attrj_kp, attrj_zeta);
     }
 
-    // TrajGenerator 업데이트 루프에서 호출
     virtual bool update(const value_t &dt) noexcept {
         if (dt <= 0.0) return false;
 
-        // 1. PD Control Law: ddq = Kp * (q_err) + Kd * (dq_err)
         angles_t q_err = m_goal_angles - m_angles;
         angles_t dq_err = m_goal_angvels - m_angvels;
         
         angles_t target_ddq = m_kp.cwiseProduct(q_err) + m_kd.cwiseProduct(dq_err);
         
-        // 2. 가속도 제한 (Saturation)
         m_angaccs = target_ddq.cwiseMax(m_min_angaccs).cwiseMin(m_max_angaccs);
         
-        // 3. 임시 속도 계산 및 클램핑
         angles_t next_angvels = m_angvels + m_angaccs * dt;
         angles_t clamped_angvels = next_angvels.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
         
-        // 핵심 개선 1: 속도가 클램핑되었다면, 실제 적용 가능한 가속도로 역산하여 동기화
         m_angaccs = (clamped_angvels - m_angvels) / dt;
-        
-        // 핵심 개선 2: 정확한 등가속도 운동 공식을 사용한 위치 적분
         m_angles += (m_angvels * dt) + (0.5 * m_angaccs * dt * dt);
-        
-        // 4. 최종 속도 업데이트
         m_angvels = clamped_angvels;
 
-        update_clip(); // 위치 클램핑
+        update_clip(); 
         return true;
     }
 
@@ -81,18 +71,36 @@ class TrajAttrJ {
         m_goal_angvels = new_goal_dq.cwiseMax(m_min_angvels).cwiseMin(m_max_angvels);
     }
 
-    /** @brief 조인트 단일 값 Kp 설정 (임계 댐핑 Kd 자동 계산) */
-    void set_kp(value_t kp) noexcept {
+    // =========================================================================
+    // 🌟 [추가됨] 1. 조인트 전체에 동일한 Kp 설정
+    // =========================================================================
+    void set_kp(value_t kp, value_t base_zeta = 1.2) noexcept {
         m_kp = angles_t::Constant(kp);
-        // Kd = 2 * sqrt(Kp) 임계 댐핑 공식 적용
-        m_kd = angles_t::Constant(2.0 * std::sqrt(std::max(0.0, kp)));
+        
+        value_t dynamic_zeta = base_zeta;
+        if (kp > 100.0) {
+            dynamic_zeta += (kp - 100.0) * 0.002; 
+        }
+
+        m_kd = angles_t::Constant(2.0 * dynamic_zeta * std::sqrt(std::max(0.0, kp)));
     }
 
-    /** @brief 조인트별 개별 Kp 설정 */
-    void set_kp(const angles_t &kp_vec) noexcept {
+    // =========================================================================
+    // 🌟 [추가됨] 2. 조인트별로 각각 다른 Kp 설정 (배열)
+    // =========================================================================
+    void set_kp(const angles_t &kp_vec, value_t base_zeta = 1.2) noexcept {
         m_kp = kp_vec;
+        
+        // 각 조인트마다 개별적으로 Kp 값을 확인하여 댐핑 비율 계산
         for(int i = 0; i < 6; ++i) {
-            m_kd(i) = 2.0 * std::sqrt(std::max(0.0, m_kp(i)));
+            value_t current_kp = m_kp(i);
+            value_t dynamic_zeta = base_zeta;
+            
+            if (current_kp > 100.0) {
+                dynamic_zeta += (current_kp - 100.0) * 0.002;
+            }
+            
+            m_kd(i) = 2.0 * dynamic_zeta * std::sqrt(std::max(0.0, current_kp));
         }
     }
 
@@ -100,17 +108,13 @@ class TrajAttrJ {
 
   protected:
     void update_clip() noexcept {
-        // 하드웨어 한계를 넘지 않도록 최종 클램핑
         m_angles = m_angles.cwiseMax(m_min_angles).cwiseMin(m_max_angles);
     }
 
   protected:
     angles_t m_angles, m_angvels, m_angaccs;
     angles_t m_goal_angles, m_goal_angvels;
-    
     angles_t m_kp, m_kd; 
-    
-    // 안전을 위한 Min/Max 상하한
     angles_t m_min_angles, m_max_angles;
     angles_t m_min_angvels, m_max_angvels;
     angles_t m_min_angaccs, m_max_angaccs;
