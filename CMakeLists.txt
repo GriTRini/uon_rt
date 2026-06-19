@@ -67,10 +67,18 @@ target_link_libraries(rt_bind PRIVATE
     rt dl
 )
 
-# 9. 빌드 후 의존성 라이브러리를 rt_py 폴더로 복사
-# 이렇게 하면 rt_py 폴더만 들고 다니면 어디서든 실행 가능합니다.
+# 9. 빌드 후 의존성 라이브러리 및 설정 파일을 rt_py 폴더로 복사 (Standalone 배포 세팅)
+# 이 설정으로 rt_py 폴더만 옮기면 어디서든 독립적으로 실행 가능해집니다.
 add_custom_command(TARGET rt_bind POST_BUILD
+    # 1) HCR 동적 라이브러리(.so) 복사
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HCR_LIB_PATH}/libclink_api_rpc_client.so" "$<TARGET_FILE_DIR:rt_bind>/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HCR_KINE_LIB_PATH}/libkinematics_hcr_3gen.so" "$<TARGET_FILE_DIR:rt_bind>/"
-    COMMENT "Copying dependency libraries to rt_py directory..."
+    
+    # 2) HCR 설정 파일(config_rpc.ini) 복사
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HCR_SDK_DIR}/config/config_rpc.ini" "$<TARGET_FILE_DIR:rt_bind>/"
+    
+    # 3) 로그가 저장될 빈 log 폴더 생성
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:rt_bind>/log"
+    
+    COMMENT "Packaging all dependencies and configs into rt_py directory..."
 )
