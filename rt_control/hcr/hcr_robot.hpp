@@ -35,7 +35,7 @@ public:
     HcrRobot(const std::string& model_name, 
              const std::chrono::milliseconds update_dt = std::chrono::milliseconds(5))
         : RobotBase(model_name, update_dt),
-          CLINK_CONFIG_FILE("./config_rpc.ini"),
+          CLINK_CONFIG_FILE(std::string(HANWHA_ROOT_PATH) + "/config/config_rpc.ini"),
           m_is_connected(false),
           m_is_rt_control_ready(false),
           cbox_id(0),
