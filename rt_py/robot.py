@@ -39,6 +39,10 @@ class Robot:
     def open_connection(self, ip: str = "192.168.1.30", port: int = 12345) -> bool:
         """로봇 컨트롤러와 TCP/IP 연결을 시도합니다."""
         return self._impl.open_connection(ip, port)
+    
+    def close_connection(self) -> bool:
+        """로봇 컨트롤러와의 연결을 해제합니다."""
+        return self._impl.close_connection()
 
     def connect_rt(self, ip: str = "192.168.1.30", port: int = 12347) -> bool:
         """실시간 제어를 위한 런타임 제어 모드를 활성화합니다."""
