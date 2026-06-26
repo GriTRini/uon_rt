@@ -44,9 +44,19 @@ class Robot:
         """로봇 컨트롤러와의 연결을 해제합니다."""
         return self._impl.close_connection()
 
+    # 🌟 추가됨: 로봇 TCP/IP 메인 연결 해제
+    def close_connection(self) -> bool:
+        """로봇 컨트롤러와의 연결을 해제합니다."""
+        return self._impl.close_connection()
+
     def connect_rt(self, ip: str = "192.168.1.30", port: int = 12347) -> bool:
         """실시간 제어를 위한 런타임 제어 모드를 활성화합니다."""
         return self._impl.connect_rt(ip, port)
+
+    # 🌟 추가됨: 로봇 실시간 런타임 제어 모드 해제
+    def disconnect_rt(self) -> bool:
+        """실시간 제어를 위한 런타임 제어 모드를 해제합니다."""
+        return self._impl.disconnect_rt()
 
     def servo_on(self) -> bool:
         """로봇의 서보를 켭니다. 궤적 엔진이 자동 초기화됩니다."""
